@@ -1,4 +1,7 @@
 from dataclasses import dataclass
+import numpy as np
+
+from sdp import LinearExpr
 
 '''
     length-L transverse Ising chain (PBC)
@@ -90,6 +93,7 @@ class Operator:
         return self
     
     def mul(self, other) -> tuple["Operator", complex]:
+        assert self.L == other.L
         x_mask = self.x_mask ^ other.x_mask
         z_mask = self.z_mask ^ other.z_mask
 
@@ -193,23 +197,7 @@ class OperatorSum:
         return self.mul(other) - other.mul(self)
 
 
-@dataclass
-class LinearExpr:
-    '''
-        Compiled linear expression of moment variables
-    '''
-    pass
-
-
-@dataclass
-class Constraint:
-    '''
-        Compiled linear constraint on moment variables
-    '''
-    pass
-
-
-@dataclass
+@dataclass(slots=True)
 class IsingParams:
     L: int = 8
     J: float = 1.
@@ -217,6 +205,7 @@ class IsingParams:
 
 
 def build_hamil(params: IsingParams):
+    assert params.L >= 2
     x_op = Operator('X'+'I'*(params.L-1))
     zz_op = Operator('ZZ'+'I'*(params.L-2))
     hamil_terms = {}
@@ -235,16 +224,18 @@ def build_hamil(params: IsingParams):
 
 
 class IsingCompiler:
-    parmas: IsingParams
+    params: IsingParams
     basis_tir: list[Operator] # length-L operator basis containing only translation-invariant representatives (TIR)
-    basis: list[Operator] # length-L operator basis after expanding all translations
+    basis: list[Operator]     # length-L operator basis after expanding all translations
+
     moment_index: dict[int, int]
     moment_ops: list[Operator]
-    moment_matrix: list[list[tuple[int, complex]]]
-    constraints: list[Constraint]
+    moment_matrix: list[list[LinearExpr]]
+    constraints: list[LinearExpr]
+    constraints_rank: int
 
-    hamil_op: OperatorSum # full hamiltonian for commutator computations
-    hamil_expr: dict[int, float|complex] # TIR hamiltonian expression
+    hamil_op: OperatorSum  # full hamiltonian operator for commutator computations
+    hamil_expr: LinearExpr # compiled hamiltonian expression
 
     def __init__(self, params: IsingParams):
         self.L = params.L
@@ -256,6 +247,9 @@ class IsingCompiler:
         '''
             basis_str: list of TIR operators with reduced length
         '''
+        for op_str in basis_str:
+            if len(op_str) > self.L:
+                raise ValueError('basis_tir operator length exceeds system size L')
         self.basis_tir = [Operator(op_str+'I'*(self.L-len(op_str))) for op_str in basis_str]
         self.basis = []
         basis_seen = set()
@@ -266,12 +260,12 @@ class IsingCompiler:
                     basis_seen.add(op_shift)
                     self.basis.append(op_shift)
 
-        # construct moment variables (TIR)
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct moment variables (TIR)
         self.moment_index = {}
         self.moment_ops = []
         self.moment_matrix = []
-        self.constraints = []
 
+        # moment matrix is hermitian by construction
         for op1 in self.basis:
             row = []
             for op2 in self.basis:
@@ -280,7 +274,7 @@ class IsingCompiler:
                 if key not in self.moment_index:
                     self.moment_index[key] = len(self.moment_ops)
                     self.moment_ops.append(op)
-                row.append((self.moment_index[key], phase))
+                row.append(LinearExpr(terms={self.moment_index[key]: phase}, const=0))
             self.moment_matrix.append(row)
         
         # hamiltonian must be representable in the current moment variable space
@@ -288,10 +282,59 @@ class IsingCompiler:
         if self.hamil_expr is None:
             raise ValueError('current basis cannot represent the Hamiltonian')
         
-        # construct constraints
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct constraints
+        self.constraints = []
+        self.constraints_rank = 0
+
+        # normalization constraint, <I> == 1
+        id_key = Operator('I'*self.L).canon()
+        if id_key not in self.moment_index:
+            raise ValueError('current basis cannot represent the identity operator')
+        self.constraints.append(LinearExpr(
+            terms={self.moment_index[id_key]: 1.},
+            const=-1.,
+        ))
+
+        # eigenstate constraints, <[H,O]> == 0
+        for op in self.moment_ops:
+            comm_op = self.hamil_op.commutator(OperatorSum({op: 1.}))
+            expr = self.compile_expr(comm_op)
+            if expr is None:
+                continue
+            if expr.terms or expr.const != 0:
+                self.constraints.append(expr)
+        
+        # symmtries
         ...
 
-    def compile_expr(self, op_sum: OperatorSum):
+        # prune redundant constraints
+        ...
+
+        # compute the rank of constraints
+        if not self.constraints:
+            self.constraints_rank = 0
+        else:
+            mat = np.zeros(
+                (len(self.constraints), len(self.moment_ops)),
+                dtype=np.complex128,
+            )
+            for row, expr in enumerate(self.constraints):
+                for idx, coeff in expr.terms.items():
+                    mat[row, idx] = complex(coeff)
+            self.constraints_rank = int(np.linalg.matrix_rank(mat))
+
+    def summary(self):
+        return {
+            'L': self.L,
+            'basis_tir': len(self.basis_tir),
+            'basis': len(self.basis),
+            'moment_ops': len(self.moment_ops),
+            'constraints': len(self.constraints),
+            'constraints_rank': self.constraints_rank,
+            'hamil_expr': self._get_expr_str(self.hamil_expr),
+        }
+
+    def compile_expr(self, op_sum: OperatorSum) -> LinearExpr:
         expr = {}
         for op, coeff in op_sum.terms.items():
             key = op.canon()
@@ -304,7 +347,16 @@ class IsingCompiler:
                 expr[idx] = coeff
             if expr[idx] == 0:
                 del expr[idx]
-        return expr
+        return LinearExpr(terms=expr, const=0)
+
+    def _get_expr_str(self, expr: LinearExpr) -> str:
+        parts = [
+            f'{coeff}*<{self.moment_ops[idx]}>'
+            for idx, coeff in expr.terms.items()
+        ]
+        if expr.const != 0:
+            parts.append(str(expr.const))
+        return ' + '.join(parts)
 
 
 if __name__ == '__main__':
@@ -325,15 +377,19 @@ if __name__ == '__main__':
     print(op_sum1.mul(op_sum2))
 
     # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-    comp = IsingCompiler(params=IsingParams())
-    comp.compile(basis_str=['I', 'X', 'Y', 'Z', 'ZZ'])
-    print(*comp.basis_tir)
-    print(*comp.basis)
-    print(len(comp.moment_ops))
-    print(*comp.moment_ops)
-    print(comp.hamil_op)
+    compiler = IsingCompiler(params=IsingParams())
+    compiler.compile(basis_str=['I', 'X', 'Y', 'Z', 'ZZ'])
+    print(*compiler.basis_tir)
+    print(*compiler.basis)
 
-    print({
-        str(comp.moment_ops[idx]): coeff
-        for idx, coeff in comp.hamil_expr.items()
-    })
+    print(len(compiler.moment_ops))
+    print(*compiler.moment_ops)
+
+    print(compiler.hamil_op)
+    print(compiler._get_expr_str(compiler.hamil_expr))
+
+    print(len(compiler.constraints))
+    for expr in compiler.constraints:
+        print(compiler._get_expr_str(expr))
+
+    print(compiler.summary())
