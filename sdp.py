@@ -1,13 +1,23 @@
 from dataclasses import dataclass, field
 import cvxpy as cp
 
+
 @dataclass(slots=True)
 class LinearExpr:
     '''
         Compiled affine expression of moment variables
     '''
-    terms: dict[int, complex] = field(default_factory=dict)
-    const: complex = 0. + 0.j
+    terms: dict[int, float|complex] = field(default_factory=dict)
+    const: float|complex = 0
+
+
+@dataclass(slots=True)
+class SDPData:
+    var_cpx: bool
+    n_vars: int
+    M: list[list[LinearExpr]]
+    constraints: list[LinearExpr]
+    objective: LinearExpr
 
 
 class SDPSolver:
@@ -23,20 +33,20 @@ class SDPSolver:
             e += coeff * self.m[idx]
         return e
 
-    def build(self, compiler):
-        self.m = cp.Variable(len(compiler.moment_ops), complex=True, name='moment_expts')
-        # !! vectorize by pre-computing coeff matrix for each moment variable
+    def build(self, data: SDPData):
+        self.m = cp.Variable(data.n_vars, complex=data.var_cpx, name='vars')
+        # [TODO] vectorize by pre-computing coeff matrix for each moment variable
         self.M = cp.bmat([
             [self._compile_expr(expr) for expr in row]
-            for row in compiler.moment_matrix
+            for row in data.M
         ])
         self.constraints = [self.M >> 0]
 
-        for expr in compiler.constraints:
+        for expr in data.constraints:
             e = self._compile_expr(expr)
             self.constraints.append(e == 0)
 
-        self.objective = cp.Minimize(cp.real(self._compile_expr(compiler.hamil_expr)))
+        self.objective = cp.Minimize(self._compile_expr(data.objective))
         self.problem = cp.Problem(self.objective, self.constraints)
         return self.problem
 
@@ -50,7 +60,7 @@ class SDPSolver:
     def summary(self):
         assert self.problem is not None and self.status is not None
         return {
-            'n_moments': self.m.shape[0],
+            'n_vars': self.m.shape[0],
             'n_constraints': len(self.constraints),
             'status': self.problem.status,
             'value': self.problem.value,
@@ -71,13 +81,13 @@ if __name__ == '__main__':
 
     compiler = IsingCompiler(params=params)
     compiler.compile(
-        basis_str=basis1 # basis0, basis1, basis2
+        basis=basis1 # basis0, basis1, basis2
     )
     print(compiler.summary())
 
     solver = SDPSolver()
-    solver.build(compiler)
-    solver.solve()
+    solver.build(compiler.sdp_data())
+    solver.solve(solver='SCS', eps=1e-4, max_iters=10_000)
 
     print(solver.problem.value/params.L)
     print(solver.problem.status)

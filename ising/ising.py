@@ -1,39 +1,40 @@
 from dataclasses import dataclass
 import numpy as np
 
-from sdp import LinearExpr
+from sdp import LinearExpr, SDPData
+
 
 '''
     length-L transverse Ising chain (PBC)
 '''
 
-class Operator:
+class PauliString:
     L: int      # bit length
     x_mask: int # bit representation of x operators
     z_mask: int # bit representation of z operators
 
-    # ocanonical representation, unique as the translation-invariant representative (TIR)
+    # ocanonical representation, unique as the translation-invariant representative
     _canon: int | None
 
-    def __init__(self, op_str: str):
-        self.L = len(op_str)
+    def __init__(self, pstr: str):
+        self.L = len(pstr)
         self.x_mask = 0
         self.z_mask = 0
-        for i, op in enumerate(op_str):
-            if op in 'XY':
+        for i, pauli in enumerate(pstr):
+            if pauli in 'XY':
                 self.x_mask |= 1 << i
-            if op in 'ZY':
+            if pauli in 'ZY':
                 self.z_mask |= 1 << i
         self._canon = None
 
     @classmethod
     def _from_masks(cls, L: int, x_mask: int, z_mask: int):
-        op = cls.__new__(cls)
-        op.L = L
-        op.x_mask = x_mask
-        op.z_mask = z_mask
-        op._canon = None
-        return op
+        pstr = cls.__new__(cls)
+        pstr.L = L
+        pstr.x_mask = x_mask
+        pstr.z_mask = z_mask
+        pstr._canon = None
+        return pstr
     
     def _rotate_l(self, mask: int, shift: int) -> int:
         shift %= self.L
@@ -57,12 +58,12 @@ class Operator:
         return self._canon
 
     def translate(self, shift: int):
-        op = Operator.__new__(Operator)
-        op.L = self.L
-        op.x_mask = self._rotate_l(self.x_mask, shift)
-        op.z_mask = self._rotate_l(self.z_mask, shift)
-        op._canon = self._canon
-        return op
+        pstr = PauliString.__new__(PauliString)
+        pstr.L = self.L
+        pstr.x_mask = self._rotate_l(self.x_mask, shift)
+        pstr.z_mask = self._rotate_l(self.z_mask, shift)
+        pstr._canon = self._canon
+        return pstr
 
     def __eq__(self, other):
         return (
@@ -88,16 +89,16 @@ class Operator:
             else:
                 chars.append('Y')
         return ''.join(chars)
-    
+
     def dag(self):
         return self
-    
-    def mul(self, other) -> tuple["Operator", complex]:
+
+    def mul(self, other) -> tuple["PauliString", float|complex]:
         assert self.L == other.L
         x_mask = self.x_mask ^ other.x_mask
         z_mask = self.z_mask ^ other.z_mask
 
-        phase = 1.0 + 0.0j
+        phase = 1.
         support = self.x_mask | self.z_mask | other.x_mask | other.z_mask
 
         while support:
@@ -120,77 +121,81 @@ class Operator:
 
             support ^= bit
 
-        return Operator._from_masks(self.L, x_mask, z_mask), phase
+        return PauliString._from_masks(self.L, x_mask, z_mask), phase
+
+    def parity(self):
+        # +1 for K even and -1 for K odd
+        return 1 - 2 * int((self.x_mask & self.z_mask).bit_count() % 2)
 
 
-class OperatorSum:
+class Operator:
     L: int
-    terms: dict[Operator, complex]
+    terms: dict[PauliString, float|complex]
 
     def __init__(self, terms=None):
         self.terms = {}
         if terms is not None:
-            for op, coeff in terms.items():
+            for pstr, coeff in terms.items():
                 if coeff != 0:
-                    self.terms[op] = coeff
+                    self.terms[pstr] = coeff
 
     def __str__(self):
         if not self.terms:
             return '0'
         return ' + '.join([
-            f'{coeff}*{op}' for op, coeff in self.terms.items()
+            f'{coeff}*{str(pstr)}' for pstr, coeff in self.terms.items()
         ])
 
     def __add__(self, other):
         result = self.terms.copy()
-        for op, coeff in other.terms.items():
-            if op in result:
-                result[op] += coeff
+        for pstr, coeff in other.terms.items():
+            if pstr in result:
+                result[pstr] += coeff
             else:
-                result[op] = coeff
-            if result[op] == 0:
-                del result[op]
-        return OperatorSum(result)
+                result[pstr] = coeff
+            if result[pstr] == 0:
+                del result[pstr]
+        return Operator(result)
     
     def __sub__(self, other):
         result = self.terms.copy()
-        for op, coeff in other.terms.items():
-            if op in result:
-                result[op] -= coeff
+        for pstr, coeff in other.terms.items():
+            if pstr in result:
+                result[pstr] -= coeff
             else:
-                result[op] = -coeff
-            if result[op] == 0:
-                del result[op]
-        return OperatorSum(result)
+                result[pstr] = -coeff
+            if result[pstr] == 0:
+                del result[pstr]
+        return Operator(result)
 
     def __neg__(self):
-        return OperatorSum({
-            op: -coeff for op, coeff in self.terms.items()
+        return Operator({
+            pstr: -coeff for pstr, coeff in self.terms.items()
         })
 
     def __rmul__(self, scalar):
-        return OperatorSum({
-            op: scalar * coeff for op, coeff in self.terms.items()
+        return Operator({
+            pstr: scalar * coeff for pstr, coeff in self.terms.items()
         })
 
     def mul(self, other):
         result = {}
-        for op1, coeff1 in self.terms.items():
-            for op2, coeff2 in other.terms.items():
-                op, phase = op1.mul(op2)
+        for pstr1, coeff1 in self.terms.items():
+            for pstr2, coeff2 in other.terms.items():
+                pstr, phase = pstr1.mul(pstr2)
                 coeff = coeff1 * coeff2 * phase
-                if op in result:
-                    result[op] += coeff
+                if pstr in result:
+                    result[pstr] += coeff
                 else:
-                    result[op] = coeff
-                if result[op] == 0:
-                    del result[op]
-        return OperatorSum(result)
+                    result[pstr] = coeff
+                if result[pstr] == 0:
+                    del result[pstr]
+        return Operator(result)
 
     def dag(self):
-        return OperatorSum({
-            op.dag(): coeff.conjugate()
-            for op, coeff in self.terms.items()
+        return Operator({
+            pstr.dag(): coeff.conjugate()
+            for pstr, coeff in self.terms.items()
         })
 
     def commutator(self, other):
@@ -206,36 +211,71 @@ class IsingParams:
 
 def build_hamil(params: IsingParams):
     assert params.L >= 2
-    x_op = Operator('X'+'I'*(params.L-1))
-    zz_op = Operator('ZZ'+'I'*(params.L-2))
+    x_pstr = PauliString('X'+'I'*(params.L-1))
+    zz_pstr = PauliString('ZZ'+'I'*(params.L-2))
     hamil_terms = {}
     for shift in range(params.L):
-        op = zz_op.translate(shift)
-        if op in hamil_terms:
-            hamil_terms[op] += -params.J
+        pstr = zz_pstr.translate(shift)
+        if pstr in hamil_terms:
+            hamil_terms[pstr] += -params.J
         else:
-            hamil_terms[op] = -params.J
-        op = x_op.translate(shift)
-        if op in hamil_terms:
-            hamil_terms[op] += -params.h
+            hamil_terms[pstr] = -params.J
+        pstr = x_pstr.translate(shift)
+        if pstr in hamil_terms:
+            hamil_terms[pstr] += -params.h
         else:
-            hamil_terms[op] = -params.h
-    return OperatorSum(hamil_terms)
+            hamil_terms[pstr] = -params.h
+    return Operator(hamil_terms)
 
 
 class IsingCompiler:
     params: IsingParams
-    basis_tir: list[Operator] # length-L operator basis containing only translation-invariant representatives (TIR)
-    basis: list[Operator]     # length-L operator basis after expanding all translations
 
-    moment_index: dict[int, int]
-    moment_ops: list[Operator]
-    moment_matrix: list[list[LinearExpr]]
-    constraints: list[LinearExpr]
-    constraints_rank: int
+    '''
+        basis_reprs:     translation-invariant representative Pauli strings with length L
+        basis_full:      full length-L basis after expanding all translations
+        basis_full_even: K-even subset of basis_full
+        basis_full_odd:  K-odd subset of basis_full
+    '''
+    basis_reprs: list[PauliString]
+    basis_full: list[PauliString]
+    basis_full_even: list[PauliString]
+    basis_full_odd: list[PauliString]
 
-    hamil_op: OperatorSum  # full hamiltonian operator for commutator computations
-    hamil_expr: LinearExpr # compiled hamiltonian expression
+    r'''
+        moment matrix
+
+            M_{ij} = \langle O^\dag_i O_j \rangle
+        
+        each O_i is a Pauli string while the moment O^\dag_i O_j may acquire additional phase
+
+        note we use the associated Pauli string (excluding the phase) as the moment variables,
+        whose expectation values parameterize the optimization space of bootstrap
+
+        K symmetry is used in
+            1) reducing moment variables,
+            2) reducing stationarity constraint generators,
+            3) and transforming M into a real symmetric matrix.
+
+        var_cpx:      False
+        var_index:    map between canonical PauliString indices and variable indices
+        vars:         moment Pauli strings as optimization variables (vars = moments_even)
+        moments_even: K-even moment Pauli strings (translation-invariant representatives)
+        moments_odd:  K-odd moment Pauli strings (translation-invariant representatives)
+        M:            moment matrix
+    '''
+    var_cpx: bool = False
+    var_index: dict[int, int]
+    vars: list[PauliString]
+    moments_even: list[PauliString]
+    moments_odd: list[PauliString]
+    M: list[list[LinearExpr]]
+
+    constraints: list[LinearExpr] # linear constraints
+    constraints_rank: int         # rank of linear constraints
+
+    hamil_op: Operator            # full hamiltonian operator for computations of stationarity constraints
+    hamil_expr: LinearExpr        # compiled hamiltonian expression
 
     def __init__(self, params: IsingParams):
         self.L = params.L
@@ -243,104 +283,138 @@ class IsingCompiler:
         self.h = params.h
         self.hamil_op = build_hamil(params)
 
-    def compile(self, basis_str: list[str]):
+    def _build_moments(self):
         '''
-            basis_str: list of TIR operators with reduced length
+            the density matrix is assumed real and symmetric
+            without loss of generality for Ising model given the anti-unitary K symmetry
+
+            moment variables self.vars involve only K-even Pauli strings because:
+
+                1) the expectation value of K-odd Pauli string, which involves odd number of Y,
+                   is purely imaginary given a symmetric denisty matrix.
+                
+                2) any Pauli string is hermitian so its expectation should be real.
+
+            combining these facts yields <O_odd> = 0.
+            therefore any K-odd Pauli string can be removed from moment variables.
         '''
-        for op_str in basis_str:
-            if len(op_str) > self.L:
-                raise ValueError('basis_tir operator length exceeds system size L')
-        self.basis_tir = [Operator(op_str+'I'*(self.L-len(op_str))) for op_str in basis_str]
-        self.basis = []
-        basis_seen = set()
-        for op in self.basis_tir:
-            for shift in range(self.L):
-                op_shift = op.translate(shift)
-                if op_shift not in basis_seen:
-                    basis_seen.add(op_shift)
-                    self.basis.append(op_shift)
+        self.var_index = {}
+        self.vars = []
+        self.moments_even = []
+        self.moments_odd = []
 
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct moment variables (TIR)
-        self.moment_index = {}
-        self.moment_ops = []
-        self.moment_matrix = []
+        moments_even_index = {}
+        moments_odd_index = {}
 
-        # moment matrix is hermitian by construction
-        for op1 in self.basis:
+        for pstr1 in self.basis_full:
             row = []
-            for op2 in self.basis:
-                op, phase = op1.dag().mul(op2)
-                key = op.canon()
-                if key not in self.moment_index:
-                    self.moment_index[key] = len(self.moment_ops)
-                    self.moment_ops.append(op)
-                row.append(LinearExpr(terms={self.moment_index[key]: phase}, const=0))
-            self.moment_matrix.append(row)
+            for pstr2 in self.basis_full:
+                pstr, phase = pstr1.dag().mul(pstr2)
+                key = pstr.canon()
+
+                if pstr.parity() == 1:
+                    if key not in moments_even_index:
+                        moments_even_index[key] = len(self.moments_even)
+                        self.moments_even.append(pstr)
+                else:
+                    if key not in moments_odd_index:
+                        moments_odd_index[key] = len(self.moments_odd)
+                        self.moments_odd.append(pstr)
+
+        self.var_index = moments_even_index
+        self.vars = self.moments_even
+
+        # construct moment matrix M
+        self.M = []
+
+        # # plain benchmark: construct moment matrix M as a hermitian
+        # for pstr1 in self.basis_full:
+        #     row = []
+        #     for pstr2 in self.basis_full:
+        #         pstr, phase = pstr1.dag().mul(pstr2)
+        #         if pstr.parity() == 1:
+        #             row.append(LinearExpr(terms={self.var_index[pstr.canon()]: phase}, const=0))
+        #         else:
+        #             row.append(LinearExpr(terms={}, const=0))
+        #     self.M.append(row)
+
+        # transform moment matrix M to a real symmetric matrix
+        n_even = len(self.basis_full_even)
+        for i, pstr1 in enumerate(self.basis_full):
+            row = []
+            row_even = i < n_even
+
+            for j, pstr2 in enumerate(self.basis_full):
+                col_even = j < n_even
+                pstr, phase = pstr1.dag().mul(pstr2)
+                key = pstr.canon()
+
+                if pstr.parity() == -1:
+                    row.append(LinearExpr(terms={}, const=0))
+                    continue
+
+                # M = [[M_1, i M_3], [-i M_3^T, M_2]]
+                # U = diag(I, iI)
+                # \tilde{M} = U^\dag M U = [[M_1, -M_3], [-M_3^T, M_2]]
+                factor_i = 1. if row_even else -1j
+                factor_j = 1. if col_even else 1j
+                coeff = factor_i * phase * factor_j
+
+                # after transformation every entry should be real
+                coeff = complex(coeff)
+                if abs(coeff.imag) > 1e-12:
+                    raise ValueError(
+                        f'unexpected imaginary entry in transformed M: {coeff} '
+                        f'from <{str(pstr1.dag())} * {str(pstr2)}> -> {str(pstr)}'
+                    )
+                row.append(LinearExpr(
+                    terms={self.var_index[key]: float(coeff.real)},
+                    const=0,
+                ))
+            self.M.append(row)
+
+    @staticmethod
+    def _to_real_constraints(expr: LinearExpr) -> list[LinearExpr]:
+        '''
+            assume real variables and only coefficients can be complex
+        '''
+        real_terms = {}
+        imag_terms = {}
+        for idx, coeff in expr.terms.items():
+            z = complex(coeff)
+            if z.real != 0:
+                real_terms[idx] = float(z.real)
+            if z.imag != 0:
+                imag_terms[idx] = float(z.imag)
+
+        const = complex(expr.const)
+        constraints = []
+
+        real_expr = LinearExpr(
+            terms=real_terms,
+            const=float(const.real),
+        )
+        if real_expr.terms or real_expr.const != 0:
+            constraints.append(real_expr)
         
-        # hamiltonian must be representable in the current moment variable space
-        self.hamil_expr = self.compile_expr(self.hamil_op)
-        if self.hamil_expr is None:
-            raise ValueError('current basis cannot represent the Hamiltonian')
-        
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct constraints
-        self.constraints = []
-        self.constraints_rank = 0
+        imag_expr = LinearExpr(
+            terms=imag_terms,
+            const=float(const.imag),
+        )
+        if imag_expr.terms or imag_expr.const != 0:
+            constraints.append(imag_expr)
 
-        # normalization constraint, <I> == 1
-        id_key = Operator('I'*self.L).canon()
-        if id_key not in self.moment_index:
-            raise ValueError('current basis cannot represent the identity operator')
-        self.constraints.append(LinearExpr(
-            terms={self.moment_index[id_key]: 1.},
-            const=-1.,
-        ))
+        return constraints
 
-        # eigenstate constraints, <[H,O]> == 0
-        for op in self.moment_ops:
-            comm_op = self.hamil_op.commutator(OperatorSum({op: 1.}))
-            expr = self.compile_expr(comm_op)
-            if expr is None:
-                continue
-            if expr.terms or expr.const != 0:
-                self.constraints.append(expr)
-        
-        # symmtries
-        ...
-
-        # prune redundant constraints
-        ...
-
-        # compute the rank of constraints
-        if not self.constraints:
-            self.constraints_rank = 0
-        else:
-            mat = np.zeros(
-                (len(self.constraints), len(self.moment_ops)),
-                dtype=np.complex128,
-            )
-            for row, expr in enumerate(self.constraints):
-                for idx, coeff in expr.terms.items():
-                    mat[row, idx] = complex(coeff)
-            self.constraints_rank = int(np.linalg.matrix_rank(mat))
-
-    def summary(self):
-        return {
-            'L': self.L,
-            'basis_tir': len(self.basis_tir),
-            'basis': len(self.basis),
-            'moment_ops': len(self.moment_ops),
-            'constraints': len(self.constraints),
-            'constraints_rank': self.constraints_rank,
-            'hamil_expr': self._get_expr_str(self.hamil_expr),
-        }
-
-    def compile_expr(self, op_sum: OperatorSum) -> LinearExpr:
+    def _compile_expr(self, op: Operator) -> LinearExpr:
         expr = {}
-        for op, coeff in op_sum.terms.items():
-            key = op.canon()
-            if key not in self.moment_index:
+        for pstr, coeff in op.terms.items():
+            key = pstr.canon()
+            if key not in self.var_index:
+                if pstr.parity() == -1:
+                    continue
                 return None
-            idx = self.moment_index[key]
+            idx = self.var_index[key]
             if idx in expr:
                 expr[idx] += coeff
             else:
@@ -349,41 +423,137 @@ class IsingCompiler:
                 del expr[idx]
         return LinearExpr(terms=expr, const=0)
 
+    def compile(self, basis: list[str]):
+        '''
+            basis: list of translation-invariant representative Pauli strings with reduced length
+        '''
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ build basis
+        for pstr in basis:
+            if len(pstr) > self.L:
+                raise ValueError('Pauli string length exceeds system size L')
+
+        self.basis_reprs = [PauliString(pstr+'I'*(self.L-len(pstr))) for pstr in basis]
+        self.basis_full_even = []
+        self.basis_full_odd = []
+        basis_seen = set()
+        for pstr in self.basis_reprs:
+            is_even = pstr.parity() == 1
+            for shift in range(self.L):
+                pstr_shift = pstr.translate(shift)
+                if pstr_shift not in basis_seen:
+                    basis_seen.add(pstr_shift)
+                    if is_even:
+                        self.basis_full_even.append(pstr_shift)
+                    else:
+                        self.basis_full_odd.append(pstr_shift)
+        # order basis so that M has the K-even / K-odd block structure
+        self.basis_full = self.basis_full_even + self.basis_full_odd
+
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct moment related
+        self._build_moments()
+        
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct hamiltonian
+        self.hamil_expr = self._compile_expr(self.hamil_op)
+        # hamiltonian must be representable in the current moment variable space
+        if self.hamil_expr is None:
+            raise ValueError('current basis cannot represent the Hamiltonian')
+        
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct constraints
+        self.constraints = []
+        self.constraints_rank = 0
+
+        # normalization constraint, <I> == 1
+        id_key = PauliString('I'*self.L).canon()
+        if id_key not in self.var_index:
+            raise ValueError('current basis cannot represent the identity operator')
+        self.constraints.append(LinearExpr(
+            terms={self.var_index[id_key]: 1.},
+            const=-1.,
+        ))
+
+        # stationarity constraints, <[H,O]> == 0, for Pauli strings O in self.moments_odd
+        # since moment variables are real for sure, the constraints have only real coefficients.
+        # as shown in note.ipynb, only K-odd Pauli strings generate nontrivial constraints.
+        for pstr in self.moments_odd:
+            comm_op = self.hamil_op.commutator(Operator({pstr: 1}))
+            expr = self._compile_expr(comm_op)
+            if expr is None:
+                continue
+            self.constraints.extend(self._to_real_constraints(expr))
+
+        # prune redundant constraints
+        pass
+
+        # compute the rank of constraints 
+        if not self.constraints:
+            self.constraints_rank = 0
+        else:
+            mat = np.zeros((len(self.constraints), len(self.vars)), dtype=np.float64)
+            for row, expr in enumerate(self.constraints):
+                for idx, coeff in expr.terms.items():
+                    mat[row, idx] = coeff
+            self.constraints_rank = int(np.linalg.matrix_rank(mat))
+
     def _get_expr_str(self, expr: LinearExpr) -> str:
         parts = [
-            f'{coeff}*<{self.moment_ops[idx]}>'
+            f'{coeff}*<{str(self.vars[idx])}>'
             for idx, coeff in expr.terms.items()
         ]
         if expr.const != 0:
             parts.append(str(expr.const))
         return ' + '.join(parts)
 
+    def summary(self):
+        return {
+            'L': self.L,
+            'basis_reprs': len(self.basis_reprs),
+            'basis_full': len(self.basis_full),
+            'moments': {
+                'even': len(self.moments_even),
+                'odd': len(self.moments_odd),
+                'total': len(self.moments_even)+len(self.moments_odd),
+            },
+            'vars': len(self.vars),
+            'constraints': len(self.constraints),
+            'constraints_rank': self.constraints_rank,
+            'hamil_expr': self._get_expr_str(self.hamil_expr),
+        }
+
+    def sdp_data(self):
+        return SDPData(
+            var_cpx = self.var_cpx,
+            n_vars = len(self.vars),
+            M = self.M,
+            constraints = self.constraints,
+            objective = self.hamil_expr,
+        )
+
 
 if __name__ == '__main__':
 
     # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-    op1 = Operator(op_str='IXYZZZII')
-    op2 = Operator(op_str='ZZZIIIXY')
-    print(op1.canon(), op2.canon())
+    pstr1 = PauliString(pstr='IXYZZZII')
+    pstr2 = PauliString(pstr='ZZZIIIXY')
+    print(pstr1.canon(), pstr2.canon())
 
+    print(pstr1)
+    print(pstr2)
+    print(*pstr1.mul(pstr2))
+
+    op1 = Operator({pstr1: 1., pstr2: 1.j})
+    op2 = Operator({pstr1: 1., pstr2: 1.j})
     print(op1)
     print(op2)
-    print(*op1.mul(op2))
-
-    op_sum1 = OperatorSum({op1: 1., op2: 1.j})
-    op_sum2 = OperatorSum({op1: 1., op2: 1.j})
-    print(op_sum1)
-    print(op_sum2)
-    print(op_sum1.mul(op_sum2))
+    print(op1.mul(op2))
 
     # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
     compiler = IsingCompiler(params=IsingParams())
-    compiler.compile(basis_str=['I', 'X', 'Y', 'Z', 'ZZ'])
-    print(*compiler.basis_tir)
-    print(*compiler.basis)
+    compiler.compile(basis=['I', 'X', 'Y', 'Z', 'ZZ'])
+    print(*compiler.basis_reprs)
+    print(*compiler.basis_full)
 
-    print(len(compiler.moment_ops))
-    print(*compiler.moment_ops)
+    print(len(compiler.vars))
+    print(*compiler.vars)
 
     print(compiler.hamil_op)
     print(compiler._get_expr_str(compiler.hamil_expr))
