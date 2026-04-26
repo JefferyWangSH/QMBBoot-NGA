@@ -125,12 +125,6 @@ class MajoranaMonomial:
                 diam = max(diam, min(dist, self.L-dist))
         return diam
 
-    def _iter_bits(self):
-        for mode in range(4 * self.L):
-            bit = 1 << mode
-            if self.mask & bit:
-                yield bit
-
     def _rotate_l(self, mask: int, shift: int, return_sign: bool = False) -> int | tuple[int, int]:
         shift %= self.L
         if shift == 0:
@@ -186,9 +180,24 @@ class MajoranaMonomial:
 
         return MajoranaMonomial(L=self.L, mask=self.mask^other.mask), sign
 
-    def dag_phase(self) -> complex:
+    def dag_phase(self):
+        '''
+            phase acquired after hermitian operation
+        '''
         degree = self.degree()
         return 1 if ((degree*(degree-1)) // 2) % 2 == 0 else -1
+
+    def hermitian_phase(self):
+        '''
+            phase needed to make Majorana monomial a hermitian
+        '''
+        return 1 if self.dag_phase() == 1 else 1j
+
+    def _iter_bits(self):
+        for mode in range(4 * self.L):
+            bit = 1 << mode
+            if self.mask & bit:
+                yield bit
 
     def __str__(self):
         if self.mask == 0:
@@ -296,6 +305,8 @@ class HubbardParams:
     L: int = 8
     t: float = 1.
     U: float = 4.
+    # total particle number including both spins; half filling is L
+    n_particles: int | None = None
 
 
 def build_hamil(params: HubbardParams):
@@ -329,13 +340,31 @@ def build_hamil(params: HubbardParams):
     return hamil_op
 
 
+def build_number(params: HubbardParams, spin: str|None = None):
+    assert spin in (None, 'u', 'd')
+    spins = ('u', 'd') if spin is None else (spin,)
+    number_op = MajoranaOperator()
+    for s in spins:
+        number_op.add(MajoranaMonomial.identity(params.L), .5 * params.L)
+        for x in range(params.L):
+            monomial, sign = MajoranaMonomial.from_str(
+                L=params.L,
+                s=f'{x}{s}+ {x}{s}-',
+                return_sign=True,
+            )
+            number_op.add(monomial, .5j * sign)
+    return number_op
+
+
 class HubbardCompiler:
     params: HubbardParams
 
     basis_reprs: list[MajoranaMonomial]
     basis_full: list[MajoranaMonomial]
 
-    var_cpx: bool = True
+    # moment variables are real expectations of
+    # hermitianized Majorana monomials with even fermion parity
+    var_cpx: bool = False
     var_index: dict[int, int]
     vars: list[MajoranaMonomial]
     M: list[list[LinearExpr]]
@@ -346,11 +375,19 @@ class HubbardCompiler:
     hamil_op: MajoranaOperator
     hamil_expr: LinearExpr
 
+    number_op: MajoranaOperator
+    number_up_op: MajoranaOperator
+    number_dn_op: MajoranaOperator
+
     def __init__(self, params: HubbardParams):
         self.L = params.L
         self.t = params.t
         self.U = params.U
+        self.n_particles = params.n_particles
         self.hamil_op = build_hamil(params)
+        self.number_up_op = build_number(params, spin='u')
+        self.number_dn_op = build_number(params, spin='d')
+        self.number_op = self.number_up_op + self.number_dn_op
 
     @staticmethod
     def _moment(mono1: MajoranaMonomial, mono2: MajoranaMonomial) -> tuple[MajoranaMonomial, complex]:
@@ -369,12 +406,20 @@ class HubbardCompiler:
             row = []
             for monomial2 in self.basis_full:
                 monomial, phase = self._moment(monomial1, monomial2)
+                if monomial.degree() % 2:
+                    # fermion parity odd
+                    row.append(LinearExpr(terms={}, const=0))
+                    continue
+
                 key, sign = monomial.canon(return_sign=True)
                 if key not in self.var_index:
                     self.var_index[key] = len(self.vars)
                     self.vars.append(MajoranaMonomial(L=self.L, mask=key))
+                # sign compensates the swap sign generated during canonicalization;
+                # to make the optimization variables real,
+                # additional hermitian phase is factored out to make Majorana monomial a hermitian.
                 row.append(LinearExpr(
-                    terms={self.var_index[key]: phase * sign},
+                    terms={self.var_index[key]: phase * sign / monomial.hermitian_phase()},
                     const=0,
                 ))
             self.M.append(row)
@@ -386,7 +431,7 @@ class HubbardCompiler:
             if key not in self.var_index:
                 return None
             idx = self.var_index[key]
-            expr[idx] = expr.get(idx, 0) + coeff * sign
+            expr[idx] = expr.get(idx, 0) + coeff * sign / monomial.hermitian_phase()
             if expr[idx] == 0:
                 del expr[idx]
         return LinearExpr(terms=expr, const=0)
@@ -417,13 +462,38 @@ class HubbardCompiler:
             const=-1.,
         ))
 
-        for monomial in self.vars:
-            comm_op = self.hamil_op.commutator(MajoranaOperator({monomial: 1}))
-            expr = self._compile_expr(comm_op)
-            if expr is None:
-                continue
-            if expr.terms or expr.const != 0:
-                self.constraints.append(expr)
+        if self.n_particles is not None:
+            number_shift = self.number_op.copy()
+            number_shift.add(MajoranaMonomial.identity(self.L), -self.n_particles)
+
+            number_expr = self._compile_expr(number_shift)
+            if number_expr is None:
+                raise ValueError('current basis cannot represent the particle number operator')
+            self.constraints.append(number_expr)
+
+            number_var_expr = self._compile_expr(number_shift.mul(number_shift))
+            if number_var_expr is None:
+                raise ValueError('current basis cannot represent the particle number variance operator')
+            self.constraints.append(number_var_expr)
+
+        # Ward identities
+        generators = (
+            # time translation (stationarity)
+            self.hamil_op,
+            # U(1)
+            self.number_up_op,
+            self.number_dn_op,
+        )
+        for generator in generators:
+            # parity-even symmetry generators preserve monomial parity, so only parity-even
+            # moment variables can produce nontrivial constraints after odd moments are removed.
+            for monomial in self.vars:
+                comm_op = generator.commutator(MajoranaOperator({monomial: 1}))
+                expr = self._compile_expr(comm_op)
+                if expr is None:
+                    continue
+                if expr.terms or expr.const != 0:
+                    self.constraints.append(expr)
 
         if not self.constraints:
             self.constraints_rank = 0
@@ -434,9 +504,12 @@ class HubbardCompiler:
                     mat[row, idx] = coeff
             self.constraints_rank = int(np.linalg.matrix_rank(mat))
 
+        # prune linear-dependent constraints
+        ...
+
     def _get_expr_str(self, expr: LinearExpr) -> str:
         parts = [
-            f'{coeff}*<{str(self.vars[idx])}>'
+            f'{coeff*self.vars[idx].hermitian_phase()}*<{str(self.vars[idx])}>'
             for idx, coeff in expr.terms.items()
         ]
         if expr.const != 0:
@@ -462,6 +535,19 @@ class HubbardCompiler:
             constraints=self.constraints,
             objective=self.hamil_expr,
         )
+
+
+'''
+    basis_reprs helper
+'''
+def load_basis_reprs(L:int, type='local'):
+    assert type in ('local',)
+    if type == 'local':
+        return [
+            MajoranaMonomial(L=L, mask=mask)
+            for mask in range(1 << 4)
+        ]
+    ...
 
 
 if __name__ == '__main__':
@@ -500,16 +586,9 @@ if __name__ == '__main__':
     print(op1.commutator(op2))
 
     # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-    params = HubbardParams(L=8, t=1., U=4.)
+    params = HubbardParams(L=8, t=1., U=4., n_particles=8)
     compiler = HubbardCompiler(params=params)
     print(compiler.hamil_op)
 
-    compiler.compile(basis_reprs=[
-        MajoranaMonomial.identity(L=params.L),
-        MajoranaMonomial.from_str(L=params.L, s='0u+ 1u-'),
-        MajoranaMonomial.from_str(L=params.L, s='0u- 1u+'),
-        MajoranaMonomial.from_str(L=params.L, s='0d+ 1d-'),
-        MajoranaMonomial.from_str(L=params.L, s='0d- 1d+'),
-        MajoranaMonomial.from_str(L=params.L, s='0u+ 0u- 0d+ 0d-'),
-    ])
+    compiler.compile(basis_reprs=load_basis_reprs(params.L, 'local'))
     print(compiler.summary())

@@ -1,17 +1,10 @@
-from hubbard.hubbard import HubbardCompiler, HubbardParams, MajoranaMonomial
+from hubbard.hubbard import HubbardCompiler, HubbardParams, load_basis_reprs
 from sdp import SDPSolver
 
 if __name__ == '__main__':
-    params = HubbardParams(L=16, t=1., U=4.)
+    params = HubbardParams(L=16, t=1., U=4., n_particles=16)
     compiler = HubbardCompiler(params=params)
-    compiler.compile(basis_reprs=[
-        MajoranaMonomial.identity(L=params.L),
-        MajoranaMonomial.from_str(L=params.L, s='0u+ 1u-'),
-        MajoranaMonomial.from_str(L=params.L, s='0u- 1u+'),
-        MajoranaMonomial.from_str(L=params.L, s='0d+ 1d-'),
-        MajoranaMonomial.from_str(L=params.L, s='0d- 1d+'),
-        MajoranaMonomial.from_str(L=params.L, s='0u+ 0u- 0d+ 0d-'),
-    ])
+    compiler.compile(basis_reprs=load_basis_reprs(params.L, 'local'))
     print(compiler.summary())
 
     solver = SDPSolver()
