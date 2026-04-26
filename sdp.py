@@ -46,7 +46,11 @@ class SDPSolver:
             e = self._compile_expr(expr)
             self.constraints.append(e == 0)
 
-        self.objective = cp.Minimize(self._compile_expr(data.objective))
+        # objective must be real
+        obj = self._compile_expr(data.objective)
+        if obj.is_complex():
+            obj = cp.real(obj)
+        self.objective = cp.Minimize(obj)
         self.problem = cp.Problem(self.objective, self.constraints)
         return self.problem
 

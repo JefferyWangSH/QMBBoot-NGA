@@ -38,6 +38,8 @@ class PauliString:
     
     def _rotate_l(self, mask: int, shift: int) -> int:
         shift %= self.L
+        if shift == 0:
+            return mask
         full = (1 << self.L) - 1
         return ((mask << shift) | (mask >> (self.L - shift))) & full
 
@@ -128,16 +130,17 @@ class PauliString:
         return 1 - 2 * int((self.x_mask & self.z_mask).bit_count() % 2)
 
 
-class Operator:
-    L: int
+class IsingOperator:
+    L: int | None
     terms: dict[PauliString, float|complex]
 
     def __init__(self, terms=None):
+        self.L = None # L is None only for zero operator
         self.terms = {}
-        if terms is not None:
-            for pstr, coeff in terms.items():
-                if coeff != 0:
-                    self.terms[pstr] = coeff
+        if terms is None:
+            return
+        for pstr, coeff in terms.items():
+            self.add(pstr, coeff)
 
     def __str__(self):
         if not self.terms:
@@ -146,57 +149,66 @@ class Operator:
             f'{coeff}*{str(pstr)}' for pstr, coeff in self.terms.items()
         ])
 
+    def copy(self):
+        op = IsingOperator()
+        op.L = self.L
+        op.terms = self.terms.copy()
+        return op
+
+    def add(self, pstr: PauliString, coeff: float|complex):
+        if coeff == 0:
+            return
+        if self.L is None:
+            self.L = pstr.L
+        elif pstr.L != self.L:
+            raise ValueError('Pauli strings in an operator must have the same L')
+        self.terms[pstr] = self.terms.get(pstr, 0) + coeff
+        if self.terms[pstr] == 0:
+            del self.terms[pstr]
+        if not self.terms:
+            self.L = None
+
     def __add__(self, other):
-        result = self.terms.copy()
+        assert self.L is None or other.L is None or self.L == other.L
+        op = self.copy()
         for pstr, coeff in other.terms.items():
-            if pstr in result:
-                result[pstr] += coeff
-            else:
-                result[pstr] = coeff
-            if result[pstr] == 0:
-                del result[pstr]
-        return Operator(result)
-    
+            op.add(pstr, coeff)
+        return op
+
     def __sub__(self, other):
-        result = self.terms.copy()
+        assert self.L is None or other.L is None or self.L == other.L
+        op = self.copy()
         for pstr, coeff in other.terms.items():
-            if pstr in result:
-                result[pstr] -= coeff
-            else:
-                result[pstr] = -coeff
-            if result[pstr] == 0:
-                del result[pstr]
-        return Operator(result)
+            op.add(pstr, -coeff)
+        return op
 
     def __neg__(self):
-        return Operator({
-            pstr: -coeff for pstr, coeff in self.terms.items()
-        })
+        op = IsingOperator()
+        for pstr, coeff in self.terms.items():
+            op.add(pstr, -coeff)
+        return op
 
     def __rmul__(self, scalar):
-        return Operator({
-            pstr: scalar * coeff for pstr, coeff in self.terms.items()
-        })
+        op = IsingOperator()
+        for pstr, coeff in self.terms.items():
+            op.add(pstr, scalar * coeff)
+        return op
 
     def mul(self, other):
-        result = {}
+        assert self.L is None or other.L is None or self.L == other.L
+        op = IsingOperator()
         for pstr1, coeff1 in self.terms.items():
             for pstr2, coeff2 in other.terms.items():
                 pstr, phase = pstr1.mul(pstr2)
                 coeff = coeff1 * coeff2 * phase
-                if pstr in result:
-                    result[pstr] += coeff
-                else:
-                    result[pstr] = coeff
-                if result[pstr] == 0:
-                    del result[pstr]
-        return Operator(result)
+                op.add(pstr, coeff)
+        return op
 
     def dag(self):
-        return Operator({
-            pstr.dag(): coeff.conjugate()
-            for pstr, coeff in self.terms.items()
-        })
+        op = IsingOperator()
+        for pstr, coeff in self.terms.items():
+            op.add(pstr.dag(), coeff.conjugate())
+        return op
 
     def commutator(self, other):
         return self.mul(other) - other.mul(self)
@@ -211,21 +223,13 @@ class IsingParams:
 
 def build_hamil(params: IsingParams):
     assert params.L >= 2
-    x_pstr = PauliString('X'+'I'*(params.L-1))
-    zz_pstr = PauliString('ZZ'+'I'*(params.L-2))
-    hamil_terms = {}
+    x = PauliString('X'+'I'*(params.L-1))
+    zz = PauliString('ZZ'+'I'*(params.L-2))
+    hamil_op = IsingOperator()
     for shift in range(params.L):
-        pstr = zz_pstr.translate(shift)
-        if pstr in hamil_terms:
-            hamil_terms[pstr] += -params.J
-        else:
-            hamil_terms[pstr] = -params.J
-        pstr = x_pstr.translate(shift)
-        if pstr in hamil_terms:
-            hamil_terms[pstr] += -params.h
-        else:
-            hamil_terms[pstr] = -params.h
-    return Operator(hamil_terms)
+        hamil_op.add(zz.translate(shift), -params.J)
+        hamil_op.add(x.translate(shift), -params.h)
+    return hamil_op
 
 
 class IsingCompiler:
@@ -274,7 +278,7 @@ class IsingCompiler:
     constraints: list[LinearExpr] # linear constraints
     constraints_rank: int         # rank of linear constraints
 
-    hamil_op: Operator            # full hamiltonian operator for computations of stationarity constraints
+    hamil_op: IsingOperator       # full hamiltonian operator for computations of stationarity constraints
     hamil_expr: LinearExpr        # compiled hamiltonian expression
 
     def __init__(self, params: IsingParams):
@@ -307,7 +311,6 @@ class IsingCompiler:
         moments_odd_index = {}
 
         for pstr1 in self.basis_full:
-            row = []
             for pstr2 in self.basis_full:
                 pstr, phase = pstr1.dag().mul(pstr2)
                 key = pstr.canon()
@@ -406,7 +409,7 @@ class IsingCompiler:
 
         return constraints
 
-    def _compile_expr(self, op: Operator) -> LinearExpr:
+    def _compile_expr(self, op: IsingOperator) -> LinearExpr | None:
         expr = {}
         for pstr, coeff in op.terms.items():
             key = pstr.canon()
@@ -415,10 +418,7 @@ class IsingCompiler:
                     continue
                 return None
             idx = self.var_index[key]
-            if idx in expr:
-                expr[idx] += coeff
-            else:
-                expr[idx] = coeff
+            expr[idx] = expr.get(idx, 0) + coeff
             if expr[idx] == 0:
                 del expr[idx]
         return LinearExpr(terms=expr, const=0)
@@ -475,7 +475,7 @@ class IsingCompiler:
         # since moment variables are real for sure, the constraints have only real coefficients.
         # as shown in note.ipynb, only K-odd Pauli strings generate nontrivial constraints.
         for pstr in self.moments_odd:
-            comm_op = self.hamil_op.commutator(Operator({pstr: 1}))
+            comm_op = self.hamil_op.commutator(IsingOperator({pstr: 1}))
             expr = self._compile_expr(comm_op)
             if expr is None:
                 continue
@@ -540,8 +540,8 @@ if __name__ == '__main__':
     print(pstr2)
     print(*pstr1.mul(pstr2))
 
-    op1 = Operator({pstr1: 1., pstr2: 1.j})
-    op2 = Operator({pstr1: 1., pstr2: 1.j})
+    op1 = IsingOperator({pstr1: 1., pstr2: 1.j})
+    op2 = IsingOperator({pstr1: 1., pstr2: 1.j})
     print(op1)
     print(op2)
     print(op1.mul(op2))
