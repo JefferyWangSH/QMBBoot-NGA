@@ -4,7 +4,12 @@ from sdp import SDPSolver
 if __name__ == '__main__':
     params = HubbardParams(L=16, t=1., U=4., n_particles=16)
     compiler = HubbardCompiler(params=params)
-    compiler.compile(basis_reprs=load_basis_reprs(params.L, 'local'))
+    compiler.compile(basis_reprs=load_basis_reprs(
+        params.L,
+        max_degree=4,
+        max_support=1,
+        max_diameter=0,
+    ))
     print(compiler.summary())
 
     solver = SDPSolver()

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import itertools
 import scipy as sp
 
 from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
@@ -93,38 +94,6 @@ class MajoranaMonomial:
 
         return (cls(L=L, mask=mask), total_sign) if return_sign else cls(L=L, mask=mask)
 
-    def degree(self) -> int:
-        '''
-            degree of the monomial
-        '''
-        return self.mask.bit_count()
-
-    def local_mask(self, site: int) -> int:
-        '''
-            4-bit local mask 
-        '''
-        if not 0 <= site < self.L:
-            raise ValueError('site out of range')
-        return (self.mask >> (4 * site)) & 0xF
-
-    def support_sites(self) -> tuple[int, ...]:
-        return tuple(site for site in range(self.L) if self.local_mask(site) != 0)
-
-    def support(self) -> int:
-        return len(self.support_sites())
-
-    def diameter(self) -> int:
-        sites = self.support_sites()
-        if len(sites) <= 1:
-            return 0
-
-        diam = 0
-        for i, site1 in enumerate(sites):
-            for site2 in sites[i+1:]:
-                dist = abs(site1 - site2)
-                diam = max(diam, min(dist, self.L-dist))
-        return diam
-
     def _rotate_l(self, mask: int, shift: int, return_sign: bool = False) -> int | tuple[int, int]:
         shift %= self.L
         if shift == 0:
@@ -180,6 +149,12 @@ class MajoranaMonomial:
 
         return MajoranaMonomial(L=self.L, mask=self.mask^other.mask), sign
 
+    def degree(self) -> int:
+        '''
+            degree of the monomial
+        '''
+        return self.mask.bit_count()
+
     def dag_phase(self):
         '''
             phase acquired after hermitian operation
@@ -193,24 +168,17 @@ class MajoranaMonomial:
         '''
         return 1 if self.dag_phase() == 1 else 1j
 
-    def _iter_bits(self):
-        for mode in range(4 * self.L):
-            bit = 1 << mode
-            if self.mask & bit:
-                yield bit
-
     def __str__(self):
         if self.mask == 0:
             return 'I'
-
         spin_names = ('u', 'd')
         pm_names = ('+', '-')
         parts = []
-        for bit in self._iter_bits():
-            mode = bit.bit_length() - 1
-            site, rem = divmod(mode, 4)
-            spin, pm = divmod(rem, 2)
-            parts.append(f'{site}{spin_names[spin]}{pm_names[pm]}')
+        for mode in range(4 * self.L):
+            if self.mask & (1 << mode):
+                site, rem = divmod(mode, 4)
+                spin, pm = divmod(rem, 2)
+                parts.append(f'{site}{spin_names[spin]}{pm_names[pm]}')
         return ' '.join(parts)
 
 
@@ -534,15 +502,53 @@ class HubbardCompiler:
 
 '''
     basis_reprs helper
+
+    for each majorana monomial,
+        1) max_degree restricts the max number of majorana operator;
+        2) max_support restricts the max number of lattice sites involved;
+        3) max_diameter restricts the max distance of any two majorana operators.
 '''
-def load_basis_reprs(L:int, type='local'):
-    assert type in ('local',)
-    if type == 'local':
-        return [
-            MajoranaMonomial(L=L, mask=mask)
-            for mask in range(1 << 4)
-        ]
-    ...
+def load_basis_reprs(L: int, max_degree: int, max_support: int, max_diameter: int):
+    if max_degree < 0 or max_degree > 4 * L:
+        raise ValueError('max_degree must be between 0 and 4L')
+    if max_support < 0 or max_support > L:
+        raise ValueError('max_support must be between 0 and L')
+    if max_diameter < 0 or max_diameter > L // 2:
+        raise ValueError('max_diameter must be between 0 and L//2')
+
+    def site_diameter(sites: tuple[int, ...]) -> int:
+        diam = 0
+        for i, site1 in enumerate(sites):
+            for site2 in sites[i+1:]:
+                dist = abs(site1 - site2)
+                diam = max(diam, min(dist, L-dist))
+        return diam
+
+    def shifted_mask(sites: tuple[int, ...], masks: tuple[int, ...], anchor: int) -> int:
+        shift = sites[anchor]
+        return sum(
+            local_mask << (4 * ((site - shift) % L))
+            for site, local_mask in zip(sites, masks)
+        )
+
+    reps = [MajoranaMonomial.identity(L=L)]
+    local_masks = tuple(range(1, 1 << 4))
+    max_sites = min(max_support, max_degree, L)
+
+    for support in range(1, max_sites + 1):
+        for sites_tail in itertools.combinations(range(1, L), support - 1):
+            sites = (0, *sites_tail)
+            if site_diameter(sites) > max_diameter:
+                continue
+
+            for masks in itertools.product(local_masks, repeat=support):
+                if sum(mask.bit_count() for mask in masks) > max_degree:
+                    continue
+                mask = shifted_mask(sites, masks, anchor=0)
+                if mask != min(shifted_mask(sites, masks, anchor) for anchor in range(support)):
+                    continue
+                reps.append(MajoranaMonomial(L=L, mask=mask))
+    return reps
 
 
 if __name__ == '__main__':
@@ -553,10 +559,6 @@ if __name__ == '__main__':
 
     print(m1)
     print(m1.mask)
-    print(m1.degree())
-    print(m1.support_sites())
-    print(m1.support())
-    print(m1.diameter())
     print(m1.dag_phase())
     print(m1.translate(1))
     print(m1.canon())
@@ -585,5 +587,11 @@ if __name__ == '__main__':
     compiler = HubbardCompiler(params=params)
     print(compiler.hamil_op)
 
-    compiler.compile(basis_reprs=load_basis_reprs(params.L, 'local'))
+    # local basis: all majorana monomials supported on one site
+    compiler.compile(basis_reprs=load_basis_reprs(
+        params.L,
+        max_degree=4,
+        max_support=1,
+        max_diameter=0,
+    ))
     print(compiler.summary())
