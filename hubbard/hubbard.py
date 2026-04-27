@@ -1,7 +1,7 @@
 from dataclasses import dataclass
-import numpy as np
+import scipy as sp
 
-from sdp import LinearExpr, SDPData
+from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
 
 
 class MajoranaMonomial:
@@ -367,10 +367,10 @@ class HubbardCompiler:
     var_cpx: bool = False
     var_index: dict[int, int]
     vars: list[MajoranaMonomial]
-    M: list[list[LinearExpr]]
 
-    constraints: list[LinearExpr]
-    constraints_rank: int
+    psd_blocks: list[PSDConstraints]
+    affines: AffineConstraints
+    affines_mat: sp.sparse.csr_matrix
 
     hamil_op: MajoranaOperator
     hamil_expr: LinearExpr
@@ -400,29 +400,37 @@ class HubbardCompiler:
     def _build_moments(self):
         self.var_index = {}
         self.vars = []
-        self.M = []
 
+        # build vars
         for monomial1 in self.basis_full:
-            row = []
             for monomial2 in self.basis_full:
-                monomial, phase = self._moment(monomial1, monomial2)
+                monomial, _ = self._moment(monomial1, monomial2)
                 if monomial.degree() % 2:
-                    # fermion parity odd
-                    row.append(LinearExpr(terms={}, const=0))
                     continue
 
-                key, sign = monomial.canon(return_sign=True)
+                key = monomial.canon()
                 if key not in self.var_index:
                     self.var_index[key] = len(self.vars)
                     self.vars.append(MajoranaMonomial(L=self.L, mask=key))
+
+        # build PSD constraints
+        psd = PSDConstraints(n_vars=len(self.vars), dim=len(self.basis_full))
+        for row, monomial1 in enumerate(self.basis_full):
+            for col, monomial2 in enumerate(self.basis_full):
+                monomial, phase = self._moment(monomial1, monomial2)
+                if monomial.degree() % 2:
+                    continue
+
+                key, sign = monomial.canon(return_sign=True)
                 # sign compensates the swap sign generated during canonicalization;
                 # to make the optimization variables real,
                 # additional hermitian phase is factored out to make Majorana monomial a hermitian.
-                row.append(LinearExpr(
-                    terms={self.var_index[key]: phase * sign / monomial.hermitian_phase()},
+                coeff = phase * sign / monomial.hermitian_phase()
+                psd.add(row, col, LinearExpr(
+                    terms={self.var_index[key]: coeff},
                     const=0,
                 ))
-            self.M.append(row)
+        self.psd_blocks = [psd]
 
     def _compile_expr(self, op: MajoranaOperator) -> LinearExpr | None:
         expr = {}
@@ -453,14 +461,11 @@ class HubbardCompiler:
         if self.hamil_expr is None:
             raise ValueError('current basis cannot represent the Hamiltonian')
 
-        self.constraints = []
+        self.affines = AffineConstraints(n_vars=len(self.vars))
         id_key = MajoranaMonomial.identity(self.L).canon()
         if id_key not in self.var_index:
             raise ValueError('current basis cannot represent the identity operator')
-        self.constraints.append(LinearExpr(
-            terms={self.var_index[id_key]: 1.},
-            const=-1.,
-        ))
+        self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
 
         if self.n_particles is not None:
             number_shift = self.number_op.copy()
@@ -469,12 +474,12 @@ class HubbardCompiler:
             number_expr = self._compile_expr(number_shift)
             if number_expr is None:
                 raise ValueError('current basis cannot represent the particle number operator')
-            self.constraints.append(number_expr)
+            self.affines.add(number_expr)
 
             number_var_expr = self._compile_expr(number_shift.mul(number_shift))
             if number_var_expr is None:
                 raise ValueError('current basis cannot represent the particle number variance operator')
-            self.constraints.append(number_var_expr)
+            self.affines.add(number_var_expr)
 
         # Ward identities
         generators = (
@@ -492,20 +497,9 @@ class HubbardCompiler:
                 expr = self._compile_expr(comm_op)
                 if expr is None:
                     continue
-                if expr.terms or expr.const != 0:
-                    self.constraints.append(expr)
+                self.affines.add(expr)
 
-        if not self.constraints:
-            self.constraints_rank = 0
-        else:
-            mat = np.zeros((len(self.constraints), len(self.vars)), dtype=np.complex128)
-            for row, expr in enumerate(self.constraints):
-                for idx, coeff in expr.terms.items():
-                    mat[row, idx] = coeff
-            self.constraints_rank = int(np.linalg.matrix_rank(mat))
-
-        # prune linear-dependent constraints
-        ...
+        self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-10)
 
     def _get_expr_str(self, expr: LinearExpr) -> str:
         parts = [
@@ -522,18 +516,19 @@ class HubbardCompiler:
             'basis_reprs': len(self.basis_reprs),
             'basis_full': len(self.basis_full),
             'vars': len(self.vars),
-            'constraints': len(self.constraints),
-            'constraints_rank': self.constraints_rank,
+            'psd_blocks': len(self.psd_blocks),
+            'affines_raw': self.affines.n_rows,
+            'affines_rank': self.affines_mat.shape[0],
             'hamil_expr': self._get_expr_str(self.hamil_expr),
         }
 
     def sdp_data(self):
         return SDPData(
-            var_cpx=self.var_cpx,
-            n_vars=len(self.vars),
-            M=self.M,
-            constraints=self.constraints,
-            objective=self.hamil_expr,
+            var_cpx = self.var_cpx,
+            n_vars = len(self.vars),
+            objective = self.hamil_expr,
+            psd_blocks = self.psd_blocks,
+            affines_mat = self.affines_mat,
         )
 
 

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
-import numpy as np
+import scipy as sp
 
-from sdp import LinearExpr, SDPData
+from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
 
 
 '''
@@ -266,20 +266,22 @@ class IsingCompiler:
         vars:         moment Pauli strings as optimization variables (vars = moments_even)
         moments_even: K-even moment Pauli strings (translation-invariant representatives)
         moments_odd:  K-odd moment Pauli strings (translation-invariant representatives)
-        M:            moment matrix
+        psd_blocks:   moment PSD blocks
+        affines:      affine constraints
+        affines_mat:  affine constraints in terms of a sparse matrix
     '''
     var_cpx: bool = False
     var_index: dict[int, int]
     vars: list[PauliString]
     moments_even: list[PauliString]
     moments_odd: list[PauliString]
-    M: list[list[LinearExpr]]
 
-    constraints: list[LinearExpr] # linear constraints
-    constraints_rank: int         # rank of linear constraints
+    psd_blocks: list[PSDConstraints]
+    affines: AffineConstraints
+    affines_mat: sp.sparse.csr_matrix
 
-    hamil_op: IsingOperator       # full hamiltonian operator for computations of stationarity constraints
-    hamil_expr: LinearExpr        # compiled hamiltonian expression
+    hamil_op: IsingOperator # full hamiltonian operator for computations of stationarity constraints
+    hamil_expr: LinearExpr  # compiled hamiltonian expression
 
     def __init__(self, params: IsingParams):
         self.L = params.L
@@ -327,24 +329,19 @@ class IsingCompiler:
         self.var_index = moments_even_index
         self.vars = self.moments_even
 
-        # construct moment matrix M
-        self.M = []
-
-        # # plain benchmark: construct moment matrix M as a hermitian
-        # for pstr1 in self.basis_full:
-        #     row = []
-        #     for pstr2 in self.basis_full:
+        # # plain benchmark: construct moment psd matrix as a hermitian
+        # psd = PSDConstraints(n_vars=len(self.vars), dim=len(self.basis_full))
+        # for i, pstr1 in enumerate(self.basis_full):
+        #     for j, pstr2 in enumerate(self.basis_full):
         #         pstr, phase = pstr1.dag().mul(pstr2)
         #         if pstr.parity() == 1:
-        #             row.append(LinearExpr(terms={self.var_index[pstr.canon()]: phase}, const=0))
-        #         else:
-        #             row.append(LinearExpr(terms={}, const=0))
-        #     self.M.append(row)
+        #             psd.add(i, j, LinearExpr(terms={self.var_index[pstr.canon()]: phase}, const=0))
+        # self.psd_blocks = [psd]
 
-        # transform moment matrix M to a real symmetric matrix
+        # transform moment psd matrix to a real symmetric matrix
+        psd = PSDConstraints(n_vars=len(self.vars), dim=len(self.basis_full))
         n_even = len(self.basis_full_even)
         for i, pstr1 in enumerate(self.basis_full):
-            row = []
             row_even = i < n_even
 
             for j, pstr2 in enumerate(self.basis_full):
@@ -353,7 +350,6 @@ class IsingCompiler:
                 key = pstr.canon()
 
                 if pstr.parity() == -1:
-                    row.append(LinearExpr(terms={}, const=0))
                     continue
 
                 # M = [[M_1, i M_3], [-i M_3^T, M_2]]
@@ -370,44 +366,11 @@ class IsingCompiler:
                         f'unexpected imaginary entry in transformed M: {coeff} '
                         f'from <{str(pstr1.dag())} * {str(pstr2)}> -> {str(pstr)}'
                     )
-                row.append(LinearExpr(
+                psd.add(i, j, LinearExpr(
                     terms={self.var_index[key]: float(coeff.real)},
                     const=0,
                 ))
-            self.M.append(row)
-
-    @staticmethod
-    def _to_real_constraints(expr: LinearExpr) -> list[LinearExpr]:
-        '''
-            assume real variables and only coefficients can be complex
-        '''
-        real_terms = {}
-        imag_terms = {}
-        for idx, coeff in expr.terms.items():
-            z = complex(coeff)
-            if z.real != 0:
-                real_terms[idx] = float(z.real)
-            if z.imag != 0:
-                imag_terms[idx] = float(z.imag)
-
-        const = complex(expr.const)
-        constraints = []
-
-        real_expr = LinearExpr(
-            terms=real_terms,
-            const=float(const.real),
-        )
-        if real_expr.terms or real_expr.const != 0:
-            constraints.append(real_expr)
-        
-        imag_expr = LinearExpr(
-            terms=imag_terms,
-            const=float(const.imag),
-        )
-        if imag_expr.terms or imag_expr.const != 0:
-            constraints.append(imag_expr)
-
-        return constraints
+        self.psd_blocks = [psd]
 
     def _compile_expr(self, op: IsingOperator) -> LinearExpr | None:
         expr = {}
@@ -458,18 +421,14 @@ class IsingCompiler:
         if self.hamil_expr is None:
             raise ValueError('current basis cannot represent the Hamiltonian')
         
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct constraints
-        self.constraints = []
-        self.constraints_rank = 0
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct affine constraints
+        self.affines = AffineConstraints(n_vars=len(self.vars))
 
         # normalization constraint, <I> == 1
         id_key = PauliString('I'*self.L).canon()
         if id_key not in self.var_index:
             raise ValueError('current basis cannot represent the identity operator')
-        self.constraints.append(LinearExpr(
-            terms={self.var_index[id_key]: 1.},
-            const=-1.,
-        ))
+        self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
 
         # stationarity constraints, <[H,O]> == 0, for Pauli strings O in self.moments_odd
         # since moment variables are real for sure, the constraints have only real coefficients.
@@ -479,20 +438,9 @@ class IsingCompiler:
             expr = self._compile_expr(comm_op)
             if expr is None:
                 continue
-            self.constraints.extend(self._to_real_constraints(expr))
+            self.affines.add(expr)
 
-        # prune redundant constraints
-        pass
-
-        # compute the rank of constraints 
-        if not self.constraints:
-            self.constraints_rank = 0
-        else:
-            mat = np.zeros((len(self.constraints), len(self.vars)), dtype=np.float64)
-            for row, expr in enumerate(self.constraints):
-                for idx, coeff in expr.terms.items():
-                    mat[row, idx] = coeff
-            self.constraints_rank = int(np.linalg.matrix_rank(mat))
+        self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-10)
 
     def _get_expr_str(self, expr: LinearExpr) -> str:
         parts = [
@@ -514,8 +462,9 @@ class IsingCompiler:
                 'total': len(self.moments_even)+len(self.moments_odd),
             },
             'vars': len(self.vars),
-            'constraints': len(self.constraints),
-            'constraints_rank': self.constraints_rank,
+            'psd_blocks': len(self.psd_blocks),
+            'affines_raw': self.affines.n_rows,
+            'affines_rank': self.affines_mat.shape[0],
             'hamil_expr': self._get_expr_str(self.hamil_expr),
         }
 
@@ -523,9 +472,9 @@ class IsingCompiler:
         return SDPData(
             var_cpx = self.var_cpx,
             n_vars = len(self.vars),
-            M = self.M,
-            constraints = self.constraints,
             objective = self.hamil_expr,
+            psd_blocks = self.psd_blocks,
+            affines_mat = self.affines_mat,
         )
 
 
@@ -557,9 +506,4 @@ if __name__ == '__main__':
 
     print(compiler.hamil_op)
     print(compiler._get_expr_str(compiler.hamil_expr))
-
-    print(len(compiler.constraints))
-    for expr in compiler.constraints:
-        print(compiler._get_expr_str(expr))
-
     print(compiler.summary())
