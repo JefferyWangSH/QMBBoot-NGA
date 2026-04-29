@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import numpy as np
 import scipy as sp
 
 from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
@@ -236,30 +237,25 @@ class IsingCompiler:
     params: IsingParams
 
     '''
-        basis_reprs:     translation-invariant representative Pauli strings with length L
-        basis_full:      full length-L basis after expanding all translations
-        basis_full_even: K-even subset of basis_full
-        basis_full_odd:  K-odd subset of basis_full
+        basis_reprs: translation-invariant representative Pauli strings with length L
     '''
     basis_reprs: list[PauliString]
-    basis_full: list[PauliString]
-    basis_full_even: list[PauliString]
-    basis_full_odd: list[PauliString]
 
     r'''
         moment matrix
 
-            M_{ij} = \langle O^\dag_i O_j \rangle
+            M_{ar,b0} = \langle O^\dag_a(r) O_b(0) \rangle
+                       ~ \bigoplus_k M(k)_{ab}
         
-        each O_i is a Pauli string while the moment O^\dag_i O_j may acquire additional phase
-
-        note we use the associated Pauli string (excluding the phase) as the moment variables,
-        whose expectation values parameterize the optimization space of bootstrap
+        each O_a is a Pauli string in basis_reprs
+        while the moment O^\dag_a(r) O_b(0) may acquire additional phase.
+        note we use the associated hermitian Pauli string (excluding the phase) as the moment variables,
+        whose expectation values parameterize the optimization space of bootstrap.
 
         K symmetry is used in
             1) reducing moment variables,
-            2) reducing stationarity constraint generators,
-            3) and transforming M into a real symmetric matrix.
+            2) relating M(k) and M(-k),
+            3) and reducing stationarity constraint generators.
 
         var_cpx:      False
         var_index:    map between canonical PauliString indices and variable indices
@@ -289,88 +285,78 @@ class IsingCompiler:
         self.h = params.h
         self.hamil_op = build_hamil(params)
 
-    def _build_moments(self):
+    def _build_vars(self):
         '''
-            the density matrix is assumed real and symmetric
-            without loss of generality for Ising model given the anti-unitary K symmetry
+            build moments_even, moments_odd, and vars
 
             moment variables self.vars involve only K-even Pauli strings because:
 
                 1) the expectation value of K-odd Pauli string, which involves odd number of Y,
-                   is purely imaginary given a symmetric denisty matrix.
-                
+                   is purely imaginary given a K-symmetric denisty matrix.
+
                 2) any Pauli string is hermitian so its expectation should be real.
 
             combining these facts yields <O_odd> = 0.
             therefore any K-odd Pauli string can be removed from moment variables.
         '''
-        self.var_index = {}
         self.vars = []
+        self.var_index = {}
         self.moments_even = []
         self.moments_odd = []
-
         moments_even_index = {}
         moments_odd_index = {}
 
-        for pstr1 in self.basis_full:
-            for pstr2 in self.basis_full:
-                pstr, phase = pstr1.dag().mul(pstr2)
-                key = pstr.canon()
+        for pstr1 in self.basis_reprs:
+            for r in range(self.L):
+                pstr1r = pstr1.translate(r)
+                for pstr2 in self.basis_reprs:
+                    pstr, _ = pstr1r.dag().mul(pstr2)
+                    key = pstr.canon()
 
-                if pstr.parity() == 1:
-                    if key not in moments_even_index:
-                        moments_even_index[key] = len(self.moments_even)
-                        self.moments_even.append(pstr)
-                else:
-                    if key not in moments_odd_index:
-                        moments_odd_index[key] = len(self.moments_odd)
-                        self.moments_odd.append(pstr)
+                    if pstr.parity() == 1:
+                        if key not in moments_even_index:
+                            moments_even_index[key] = len(self.moments_even)
+                            self.moments_even.append(pstr)
+                    else:
+                        if key not in moments_odd_index:
+                            moments_odd_index[key] = len(self.moments_odd)
+                            self.moments_odd.append(pstr)
 
-        self.var_index = moments_even_index
         self.vars = self.moments_even
+        self.var_index = moments_even_index
 
-        # # plain benchmark: construct moment psd matrix as a hermitian
-        # psd = PSDConstraints(n_vars=len(self.vars), dim=len(self.basis_full))
-        # for i, pstr1 in enumerate(self.basis_full):
-        #     for j, pstr2 in enumerate(self.basis_full):
-        #         pstr, phase = pstr1.dag().mul(pstr2)
-        #         if pstr.parity() == 1:
-        #             psd.add(i, j, LinearExpr(terms={self.var_index[pstr.canon()]: phase}, const=0))
-        # self.psd_blocks = [psd]
+    def _build_psd(self):
+        '''
+            build momentum PSD blocks M(k)
+        '''
+        self.psd_blocks = []
+        dim = len(self.basis_reprs)
 
-        # transform moment psd matrix to a real symmetric matrix
-        psd = PSDConstraints(n_vars=len(self.vars), dim=len(self.basis_full))
-        n_even = len(self.basis_full_even)
-        for i, pstr1 in enumerate(self.basis_full):
-            row_even = i < n_even
+        r'''
+            K symmetry imposes that M(-k) = diag(eta) M(k)^\ast diag(eta)
+            therefore the number of independent momentum PSD blocks can be reduced by half
+        '''
+        for n in range(self.L//2 + 1):
+            k = 2*np.pi * n / self.L
+            psd = PSDConstraints(n_vars=len(self.vars), dim=dim)
 
-            for j, pstr2 in enumerate(self.basis_full):
-                col_even = j < n_even
-                pstr, phase = pstr1.dag().mul(pstr2)
-                key = pstr.canon()
+            for row, pstr1 in enumerate(self.basis_reprs):
+                for col, pstr2 in enumerate(self.basis_reprs):
+                    expr = {}
+                    for r in range(self.L):
+                        pstr1r = pstr1.translate(r)
+                        pstr, phase = pstr1r.dag().mul(pstr2)
+                        if pstr.parity() == -1:
+                            continue
 
-                if pstr.parity() == -1:
-                    continue
+                        idx = self.var_index[pstr.canon()]
+                        coeff = np.exp(1j * k * r) * phase
+                        expr[idx] = expr.get(idx, 0) + coeff
+                        if abs(expr[idx]) < 1e-12:
+                            del expr[idx]
+                    psd.add(row, col, LinearExpr(terms=expr, const=0))
 
-                # M = [[M_1, i M_3], [-i M_3^T, M_2]]
-                # U = diag(I, iI)
-                # \tilde{M} = U^\dag M U = [[M_1, -M_3], [-M_3^T, M_2]]
-                factor_i = 1. if row_even else -1j
-                factor_j = 1. if col_even else 1j
-                coeff = factor_i * phase * factor_j
-
-                # after transformation every entry should be real
-                coeff = complex(coeff)
-                if abs(coeff.imag) > 1e-12:
-                    raise ValueError(
-                        f'unexpected imaginary entry in transformed M: {coeff} '
-                        f'from <{str(pstr1.dag())} * {str(pstr2)}> -> {str(pstr)}'
-                    )
-                psd.add(i, j, LinearExpr(
-                    terms={self.var_index[key]: float(coeff.real)},
-                    const=0,
-                ))
-        self.psd_blocks = [psd]
+            self.psd_blocks.append(psd)
 
     def _compile_expr(self, op: IsingOperator) -> LinearExpr | None:
         expr = {}
@@ -396,24 +382,12 @@ class IsingCompiler:
                 raise ValueError('Pauli string length exceeds system size L')
 
         self.basis_reprs = [PauliString(pstr+'I'*(self.L-len(pstr))) for pstr in basis]
-        self.basis_full_even = []
-        self.basis_full_odd = []
-        basis_seen = set()
-        for pstr in self.basis_reprs:
-            is_even = pstr.parity() == 1
-            for shift in range(self.L):
-                pstr_shift = pstr.translate(shift)
-                if pstr_shift not in basis_seen:
-                    basis_seen.add(pstr_shift)
-                    if is_even:
-                        self.basis_full_even.append(pstr_shift)
-                    else:
-                        self.basis_full_odd.append(pstr_shift)
-        # order basis so that M has the K-even / K-odd block structure
-        self.basis_full = self.basis_full_even + self.basis_full_odd
 
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct moment related
-        self._build_moments()
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct moment variables
+        self._build_vars()
+
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct momentum PSD blocks
+        self._build_psd()
         
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct hamiltonian
         self.hamil_expr = self._compile_expr(self.hamil_op)
@@ -455,7 +429,6 @@ class IsingCompiler:
         return {
             'L': self.L,
             'basis_reprs': len(self.basis_reprs),
-            'basis_full': len(self.basis_full),
             'moments': {
                 'even': len(self.moments_even),
                 'odd': len(self.moments_odd),
@@ -499,8 +472,6 @@ if __name__ == '__main__':
     compiler = IsingCompiler(params=IsingParams())
     compiler.compile(basis=['I', 'X', 'Y', 'Z', 'ZZ'])
     print(*compiler.basis_reprs)
-    print(*compiler.basis_full)
-
     print(len(compiler.vars))
     print(*compiler.vars)
 
