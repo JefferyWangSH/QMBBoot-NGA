@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 import cvxpy as cp
 import numpy as np
 import scipy as sp
-from scipy.linalg import qr
+import sksparse.spqr as spqr
 
 @dataclass(slots=True)
 class LinearExpr:
@@ -48,50 +48,54 @@ class LinearExpr:
 class PSDConstraints:
     r'''
         M_{ij} = C_{ij} + \sum_k A^k_{ij} m_k
+               = C_{ij} + \sum_k A_{i,j,k} m_k
+
+        implemented as a sparse matrix multiplication
+
+        e.g. for momentum PSD block
+        each entry M_{ij} involves ~L number of vars (through fourier transformation);
+        this leads to roughly ~ (dim^2 * L) number of non-zero entries in A_{ij,k}
+        and a quite sparse density ~ (L / n_vars).
     '''
     n_vars: int
     dim: int
 
-    rows: list[list[int]] = field(init=False)
-    cols: list[list[int]] = field(init=False)
-    vals: list[list[float|complex]] = field(init=False)
+    # flattened view of A^k_{ij} into a sparse matrix A_{ij,k}
+    rows: list[int] = field(default_factory=list)
+    cols: list[int] = field(default_factory=list)
+    vals: list[float|complex] = field(default_factory=list)
 
-    const_rows: list[int] = field(init=False)
-    const_cols: list[int] = field(init=False)
-    const_vals: list[float|complex] = field(init=False)
+    # flattened view of C_{ij}
+    const_rows: list[int] = field(default_factory=list)
+    const_vals: list[float|complex] = field(default_factory=list)
 
-    def __post_init__(self):
-        self.rows = [[] for _ in range(self.n_vars)]
-        self.cols = [[] for _ in range(self.n_vars)]
-        self.vals = [[] for _ in range(self.n_vars)]
-        self.const_rows = []
-        self.const_cols = []
-        self.const_vals = []
+    def add(self, i: int, j: int, expr: LinearExpr):
+        idx = i + j * self.dim
 
-    def add(self, row: int, col: int, expr: LinearExpr):
         if expr.const != 0:
-            self.const_rows.append(row)
-            self.const_cols.append(col)
+            self.const_rows.append(idx)
             self.const_vals.append(expr.const)
 
-        for idx, coeff in expr.terms.items():
+        for k, coeff in expr.terms.items():
             if coeff == 0:
                 continue
-            self.rows[idx].append(row)
-            self.cols[idx].append(col)
-            self.vals[idx].append(coeff)
+            self.rows.append(idx)
+            self.cols.append(k)
+            self.vals.append(coeff)
 
-    def matrices(self):
-        shape = (self.dim, self.dim)
-        const = sp.sparse.csr_matrix(
-            (self.const_vals, (self.const_rows, self.const_cols)),
-            shape=shape,
-        )
-        coeffs = [
-            sp.sparse.csr_matrix((vals, (rows, cols)), shape=shape)
-            for rows, cols, vals in zip(self.rows, self.cols, self.vals)
-        ]
-        return const, coeffs
+    def matrix_expr(self, vars: cp.Variable) -> cp.Expression:
+        '''
+            get CVXPY expression for the PSD matrix
+        '''
+        shape = (self.dim*self.dim, self.n_vars)
+
+        A = sp.sparse.csc_matrix((self.vals, (self.rows, self.cols)), shape=shape)
+        dtype = np.result_type(np.asarray(self.vals), np.asarray(self.const_vals), float)
+        C = np.zeros(self.dim*self.dim, dtype=dtype)
+        np.add.at(C, self.const_rows, self.const_vals)
+
+        res = A @ vars + cp.Constant(C)
+        return cp.reshape(res, (self.dim, self.dim), order='F')
 
 
 @dataclass(slots=True)
@@ -122,8 +126,8 @@ class AffineConstraints:
         if not prune or self.n_rows == 0:
             return mat, self.n_rows
 
-        _, r, piv = qr(mat.toarray().T, pivoting=True, mode='economic')
-        rank = int(np.linalg.matrix_rank(r, tol=tol))
+        r, piv = spqr.spqr(mat.T.tocsc(), mode='r', tol=tol)
+        rank = int(np.count_nonzero(np.abs(r.diagonal()) > tol))
         return mat[sorted(piv[:rank])], rank
 
 
@@ -145,26 +149,20 @@ class SDPSolver:
         self.status = None
 
     def build(self, data: SDPData):
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ variables
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ variables
         self.vars = cp.Variable(data.n_vars, complex=data.var_cpx, name='vars')
-
         self.constraints = []
 
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ PSD constraints
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ PSD constraints
         for block in data.psd_blocks:
-            const, coeffs = block.matrices()
-            psd_mat = cp.Constant(const)
-            for idx, coeff in enumerate(coeffs):
-                if coeff.nnz:
-                    psd_mat += self.vars[idx] * coeff
-            self.constraints.append(psd_mat >> 0)
+            self.constraints.append(block.matrix_expr(self.vars) >> 0)
 
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ affine constraints
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ affine constraints
         if data.affines_mat.shape[0] > 0:
             m_aug = cp.hstack([self.vars, cp.Constant([1.])])
             self.constraints.append(data.affines_mat @ m_aug == 0)
 
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ objective and problem
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ objective
         obj = cp.Constant(data.objective.const)
         for idx, coeff in data.objective.terms.items():
             obj += coeff * self.vars[idx]
@@ -172,6 +170,7 @@ class SDPSolver:
             obj = cp.real(obj)
         self.objective = cp.Minimize(obj)
 
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ problem
         self.problem = cp.Problem(self.objective, self.constraints)
         return self.problem
 

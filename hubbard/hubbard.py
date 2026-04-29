@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import itertools
+import numpy as np
 import scipy as sp
 
 from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
@@ -328,7 +329,6 @@ class HubbardCompiler:
     params: HubbardParams
 
     basis_reprs: list[MajoranaMonomial]
-    basis_full: list[MajoranaMonomial]
 
     # moment variables are real expectations of
     # hermitianized Majorana monomials with even fermion parity
@@ -347,6 +347,9 @@ class HubbardCompiler:
     number_up_op: MajoranaOperator
     number_dn_op: MajoranaOperator
 
+    _pruned_cache: set[int]
+    _unpruned_cache: set[int]
+
     def __init__(self, params: HubbardParams):
         self.L = params.L
         self.t = params.t
@@ -357,52 +360,99 @@ class HubbardCompiler:
         self.number_dn_op = build_number(params, spin='d')
         self.number_op = self.number_up_op + self.number_dn_op
 
+        self._pruned_cache = set()
+        self._unpruned_cache = set()
+
     @staticmethod
-    def _moment(mono1: MajoranaMonomial, mono2: MajoranaMonomial) -> tuple[MajoranaMonomial, complex]:
+    def _moment(monomial1: MajoranaMonomial, monomial2: MajoranaMonomial) -> tuple[MajoranaMonomial, complex]:
         r'''
             O_1^\dag O_2 with O_1, O_2 Majorana monomials
         '''
-        monomial, sign = mono1.mul(mono2)
-        return monomial, sign * mono1.dag_phase()
+        monomial, sign = monomial1.mul(monomial2)
+        return monomial, sign * monomial1.dag_phase()
 
-    def _build_moments(self):
+    def _pruned(self, monomial) -> bool:
+        '''
+            return whether the monomial variable is pruned by symmetry
+        '''
+        mask = monomial.mask
+        if mask in self._pruned_cache:
+            return True
+        if mask in self._unpruned_cache:
+            return False
+
+        # Fermion parity
+        if monomial.degree() % 2:
+            self._pruned_cache.add(mask)
+            return True
+
+        # translation invariance
+        for r in range(monomial.L):
+            rot_mask, sign = monomial._rotate_l(mask, r, return_sign=True)
+            if rot_mask == mask and sign == -1:
+                # check if T^\dag(r) O T(r) = -O
+                self._pruned_cache.add(mask)
+                return True
+
+        self._unpruned_cache.add(mask)
+        return False
+
+    def _build_vars(self):
         self.var_index = {}
         self.vars = []
 
-        # build vars
-        for monomial1 in self.basis_full:
-            for monomial2 in self.basis_full:
-                monomial, _ = self._moment(monomial1, monomial2)
-                if monomial.degree() % 2:
-                    continue
+        for monomial1 in self.basis_reprs:
+            for r in range(self.L):
+                monomial1r = monomial1.translate(r)
+                for monomial2 in self.basis_reprs:
+                    monomial, _ = self._moment(monomial1r, monomial2)
+                    if self._pruned(monomial):
+                        continue
 
-                key = monomial.canon()
-                if key not in self.var_index:
-                    self.var_index[key] = len(self.vars)
-                    self.vars.append(MajoranaMonomial(L=self.L, mask=key))
+                    key = monomial.canon()
+                    if key not in self.var_index:
+                        self.var_index[key] = len(self.vars)
+                        self.vars.append(MajoranaMonomial(L=self.L, mask=key))
 
-        # build PSD constraints
-        psd = PSDConstraints(n_vars=len(self.vars), dim=len(self.basis_full))
-        for row, monomial1 in enumerate(self.basis_full):
-            for col, monomial2 in enumerate(self.basis_full):
-                monomial, phase = self._moment(monomial1, monomial2)
-                if monomial.degree() % 2:
-                    continue
+    def _build_psd(self):
+        '''
+            build momentum PSD blocks M(k)
+        '''
+        self.psd_blocks = []
+        dim = len(self.basis_reprs)
+        for n in range(self.L):
+            k = 2*np.pi * n / self.L
+            psd = PSDConstraints(n_vars=len(self.vars), dim=dim)
+            for row, monomial1 in enumerate(self.basis_reprs):
+                for col, monomial2 in enumerate(self.basis_reprs):
+                    expr = {}
+                    for r in range(self.L):
+                        rot_mask, rot_sign = monomial1._rotate_l(monomial1.mask, r, return_sign=True)
+                        monomial1r = MajoranaMonomial(L=self.L, mask=rot_mask)
+                        monomial, mul_sign = self._moment(monomial1r, monomial2)
+                        if self._pruned(monomial):
+                            continue
+                        key, canon_sign = monomial.canon(return_sign=True)
 
-                key, sign = monomial.canon(return_sign=True)
-                # sign compensates the swap sign generated during canonicalization;
-                # to make the optimization variables real,
-                # additional hermitian phase is factored out to make Majorana monomial a hermitian.
-                coeff = phase * sign / monomial.hermitian_phase()
-                psd.add(row, col, LinearExpr(
-                    terms={self.var_index[key]: coeff},
-                    const=0,
-                ))
-        self.psd_blocks = [psd]
+                        # combine Fourier phase, translation/multiplication/canonical signs,
+                        # then divide by the hermitian phase so moment variables stay real.
+                        coeff = (
+                            np.exp(1j * k * r)
+                            * rot_sign * mul_sign * canon_sign
+                            / monomial.hermitian_phase()
+                        )
+                        idx = self.var_index[key]
+                        expr[idx] = expr.get(idx, 0) + coeff
+                        if expr[idx] == 0:
+                            del expr[idx]
+                    psd.add(row, col, LinearExpr(terms=expr, const=0))
+            self.psd_blocks.append(psd)
 
     def _compile_expr(self, op: MajoranaOperator) -> LinearExpr | None:
         expr = {}
         for monomial, coeff in op.terms.items():
+            if self._pruned(monomial):
+                continue
             key, sign = monomial.canon(return_sign=True)
             if key not in self.var_index:
                 return None
@@ -413,28 +463,27 @@ class HubbardCompiler:
         return LinearExpr(terms=expr, const=0)
 
     def compile(self, basis_reprs: list[MajoranaMonomial]):
+        self._pruned_cache = set()
+        self._unpruned_cache = set()
+
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ build variables and psd blocks
         self.basis_reprs = basis_reprs
-        self.basis_full = []
-        basis_seen = set()
-        for monomial in self.basis_reprs:
-            for shift in range(self.L):
-                monomial_shift = monomial.translate(shift)
-                if monomial_shift not in basis_seen:
-                    basis_seen.add(monomial_shift)
-                    self.basis_full.append(monomial_shift)
+        self._build_vars()
+        self._build_psd()
 
-        self._build_moments()
-
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ build hamiltonian
         self.hamil_expr = self._compile_expr(self.hamil_op)
         if self.hamil_expr is None:
             raise ValueError('current basis cannot represent the Hamiltonian')
 
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ build affine constraints
         self.affines = AffineConstraints(n_vars=len(self.vars))
         id_key = MajoranaMonomial.identity(self.L).canon()
         if id_key not in self.var_index:
             raise ValueError('current basis cannot represent the identity operator')
         self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
 
+        # fix particle number
         if self.n_particles is not None:
             number_shift = self.number_op.copy()
             number_shift.add(MajoranaMonomial.identity(self.L), -self.n_particles)
@@ -482,7 +531,6 @@ class HubbardCompiler:
         return {
             'L': self.L,
             'basis_reprs': len(self.basis_reprs),
-            'basis_full': len(self.basis_full),
             'vars': len(self.vars),
             'psd_blocks': len(self.psd_blocks),
             'affines_raw': self.affines.n_rows,
