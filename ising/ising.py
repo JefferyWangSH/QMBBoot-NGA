@@ -228,8 +228,8 @@ def build_hamil(params: IsingParams):
     zz = PauliString('ZZ'+'I'*(params.L-2))
     hamil_op = IsingOperator()
     for shift in range(params.L):
-        hamil_op.add(zz.translate(shift), -params.J)
-        hamil_op.add(x.translate(shift), -params.h)
+        hamil_op.add(zz.translate(shift), -params.J / params.L)
+        hamil_op.add(x.translate(shift), -params.h / params.L)
     return hamil_op
 
 
@@ -350,7 +350,7 @@ class IsingCompiler:
                             continue
 
                         idx = self.var_index[pstr.canon()]
-                        coeff = np.exp(1j * k * r) * phase
+                        coeff = np.exp(1j * k * r) * phase / self.L
                         expr[idx] = expr.get(idx, 0) + coeff
                         if abs(expr[idx]) < 1e-12:
                             del expr[idx]

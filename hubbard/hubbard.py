@@ -290,21 +290,21 @@ def build_hamil(params: HubbardParams):
                 s=f'{x}{spin}+ {xp1}{spin}-',
                 return_sign=True,
             )
-            hamil_op.add(monomial, -.5j * params.t * sign)
+            hamil_op.add(monomial, -.5j * params.t * sign / params.L)
 
             monomial, sign = MajoranaMonomial.from_str(
                 L=params.L,
                 s=f'{x}{spin}- {xp1}{spin}+',
                 return_sign=True,
             )
-            hamil_op.add(monomial, .5j * params.t * sign)
+            hamil_op.add(monomial, .5j * params.t * sign / params.L)
 
         monomial, sign = MajoranaMonomial.from_str(
             L=params.L,
             s=f'{x}u+ {x}u- {x}d+ {x}d-',
             return_sign=True,
         )
-        hamil_op.add(monomial, -.25 * params.U * sign)
+        hamil_op.add(monomial, -.25 * params.U * sign / params.L)
 
     return hamil_op
 
@@ -314,14 +314,14 @@ def build_number(params: HubbardParams, spin: str|None = None):
     spins = ('u', 'd') if spin is None else (spin,)
     number_op = MajoranaOperator()
     for s in spins:
-        number_op.add(MajoranaMonomial.identity(params.L), .5 * params.L)
+        number_op.add(MajoranaMonomial.identity(params.L), .5)
         for x in range(params.L):
             monomial, sign = MajoranaMonomial.from_str(
                 L=params.L,
                 s=f'{x}{s}+ {x}{s}-',
                 return_sign=True,
             )
-            number_op.add(monomial, .5j * sign)
+            number_op.add(monomial, .5j * sign / params.L)
     return number_op
 
 
@@ -437,7 +437,7 @@ class HubbardCompiler:
                         # combine Fourier phase, translation/multiplication/canonical signs,
                         # then divide by the hermitian phase so moment variables stay real.
                         coeff = (
-                            np.exp(1j * k * r)
+                            np.exp(1j * k * r) / self.L
                             * rot_sign * mul_sign * canon_sign
                             / monomial.hermitian_phase()
                         )
@@ -486,7 +486,7 @@ class HubbardCompiler:
         # fix particle number
         if self.n_particles is not None:
             number_shift = self.number_op.copy()
-            number_shift.add(MajoranaMonomial.identity(self.L), -self.n_particles)
+            number_shift.add(MajoranaMonomial.identity(self.L), -float(self.n_particles) / self.L)
 
             number_expr = self._compile_expr(number_shift)
             if number_expr is None:

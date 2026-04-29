@@ -213,6 +213,6 @@ if __name__ == '__main__':
     solver.build(compiler.sdp_data())
     solver.solve(solver='SCS', eps=1e-4, max_iters=10_000)
 
-    print(solver.problem.value/params.L)
+    print(solver.problem.value)
     print(solver.problem.status)
     print(solver.summary())

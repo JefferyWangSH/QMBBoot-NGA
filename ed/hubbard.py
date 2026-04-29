@@ -60,7 +60,7 @@ def hamil(L: int, t: float = 1., U: float = 4., n_particles: int | None = None):
         for site in range(L):
             n_up = (state >> _mode(site, 0)) & 1
             n_dn = (state >> _mode(site, 1)) & 1
-            diag += U * (n_up - .5) * (n_dn - .5)
+            diag += U * (n_up - .5) * (n_dn - .5) / L
         if diag != 0:
             rows.append(col_idx)
             cols.append(col_idx)
@@ -72,8 +72,8 @@ def hamil(L: int, t: float = 1., U: float = 4., n_particles: int | None = None):
             for spin in (0, 1):
                 mode = _mode(site, spin)
                 mode_next = _mode(site_next, spin)
-                _add_hop(rows, cols, vals, index, state, mode, mode_next, -t)
-                _add_hop(rows, cols, vals, index, state, mode_next, mode, -t)
+                _add_hop(rows, cols, vals, index, state, mode, mode_next, -t/L)
+                _add_hop(rows, cols, vals, index, state, mode_next, mode, -t/L)
 
     dim = len(basis)
     return sparse.csr_matrix((vals, (rows, cols)), shape=(dim, dim), dtype=float)

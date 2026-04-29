@@ -33,7 +33,7 @@ def hamil(L, J=1., h=1.):
         ops[(i + 1) % L] = _sz
         H += -J * kron(ops)
 
-    return H
+    return H / L
 
 def gs(L, J=1., h=1., tol=1e-10, vec=False):
     H = hamil(L, J=J, h=h)
