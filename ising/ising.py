@@ -258,10 +258,10 @@ class IsingCompiler:
             3) and reducing stationarity constraint generators.
 
         var_cpx:      False
+        vars:         K-even moment Pauli strings as SDP variables
         var_index:    map between canonical PauliString indices and variable indices
-        vars:         moment Pauli strings as optimization variables (vars = moments_even)
-        moments_even: K-even moment Pauli strings (translation-invariant representatives)
-        moments_odd:  K-odd moment Pauli strings (translation-invariant representatives)
+        ward_moments: K-odd moment Pauli strings for generating Ward identities
+        ward_index:   map between canonical PauliString indices and Ward moment indices
         psd_blocks:   moment PSD blocks
         affines:      affine constraints
         affines_mat:  affine constraints in terms of a sparse matrix
@@ -269,8 +269,9 @@ class IsingCompiler:
     var_cpx: bool = False
     var_index: dict[int, int]
     vars: list[PauliString]
-    moments_even: list[PauliString]
-    moments_odd: list[PauliString]
+
+    ward_index: dict[int, int]
+    ward_moments: list[PauliString]
 
     psd_blocks: list[PSDConstraints]
     affines: AffineConstraints
@@ -285,9 +286,9 @@ class IsingCompiler:
         self.h = params.h
         self.hamil_op = build_hamil(params)
 
-    def _build_vars(self):
+    def _build_moments(self):
         '''
-            build moments_even, moments_odd, and vars
+            build SDP variables and Ward moments
 
             moment variables self.vars involve only K-even Pauli strings because:
 
@@ -298,13 +299,14 @@ class IsingCompiler:
 
             combining these facts yields <O_odd> = 0.
             therefore any K-odd Pauli string can be removed from moment variables.
+
+            Pauli strings O in self.ward_moments are used to generate Ward identities, <[C,O]> == 0.
+            as shown in note.ipynb, only K-odd Pauli strings generate nontrivial constraints.
         '''
         self.vars = []
         self.var_index = {}
-        self.moments_even = []
-        self.moments_odd = []
-        moments_even_index = {}
-        moments_odd_index = {}
+        self.ward_moments = []
+        self.ward_index = {}
 
         for pstr1 in self.basis_reprs:
             for r in range(self.L):
@@ -314,16 +316,13 @@ class IsingCompiler:
                     key = pstr.canon()
 
                     if pstr.parity() == 1:
-                        if key not in moments_even_index:
-                            moments_even_index[key] = len(self.moments_even)
-                            self.moments_even.append(pstr)
+                        if key not in self.var_index:
+                            self.var_index[key] = len(self.vars)
+                            self.vars.append(pstr)
                     else:
-                        if key not in moments_odd_index:
-                            moments_odd_index[key] = len(self.moments_odd)
-                            self.moments_odd.append(pstr)
-
-        self.vars = self.moments_even
-        self.var_index = moments_even_index
+                        if key not in self.ward_index:
+                            self.ward_index[key] = len(self.ward_moments)
+                            self.ward_moments.append(pstr)
 
     def _build_psd(self):
         '''
@@ -384,7 +383,7 @@ class IsingCompiler:
         self.basis_reprs = [PauliString(pstr+'I'*(self.L-len(pstr))) for pstr in basis]
 
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct moment variables
-        self._build_vars()
+        self._build_moments()
 
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct momentum PSD blocks
         self._build_psd()
@@ -404,10 +403,7 @@ class IsingCompiler:
             raise ValueError('current basis cannot represent the identity operator')
         self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
 
-        # stationarity constraints, <[H,O]> == 0, for Pauli strings O in self.moments_odd
-        # since moment variables are real for sure, the constraints have only real coefficients.
-        # as shown in note.ipynb, only K-odd Pauli strings generate nontrivial constraints.
-        for pstr in self.moments_odd:
+        for pstr in self.ward_moments:
             comm_op = self.hamil_op.commutator(IsingOperator({pstr: 1}))
             expr = self._compile_expr(comm_op)
             if expr is None:
@@ -429,12 +425,8 @@ class IsingCompiler:
         return {
             'L': self.L,
             'basis_reprs': len(self.basis_reprs),
-            'moments': {
-                'even': len(self.moments_even),
-                'odd': len(self.moments_odd),
-                'total': len(self.moments_even)+len(self.moments_odd),
-            },
             'vars': len(self.vars),
+            'ward_moments': len(self.ward_moments),
             'psd_blocks': len(self.psd_blocks),
             'affines_raw': self.affines.n_rows,
             'affines_rank': self.affines_mat.shape[0],

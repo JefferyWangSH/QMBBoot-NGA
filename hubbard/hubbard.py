@@ -169,6 +169,18 @@ class MajoranaMonomial:
         '''
         return 1 if self.dag_phase() == 1 else 1j
 
+    def fermion_parity(self):
+        return 1 - 2 * (self.degree() % 2)
+
+    def k_parity(self, hermitian=True):
+        mask = sum(1 << mode for mode in range(1, 4*self.L, 2))
+        # number of \gamma_2
+        cnt = (self.mask & mask).bit_count()
+        # patch from hermitianization
+        if hermitian and self.dag_phase() == -1:
+            cnt += 1
+        return 1 - 2 * (cnt % 2)
+
     def __str__(self):
         if self.mask == 0:
             return 'I'
@@ -336,6 +348,18 @@ class HubbardCompiler:
     var_index: dict[int, int]
     vars: list[MajoranaMonomial]
 
+    # moments for generating Ward identities
+    ward_index: dict[int, int]
+    ward_moments: list[MajoranaMonomial]
+
+    # cache of moment flags
+    # var:  SDP variables allowed by symmetries, e.g. 10, 11
+    # ward: moment for generating Ward identities, e.g. 01, 11
+    # zero: moment pruned by symmetries with zero expectation value, e.g. 00, 01
+    _moment_var = 1 << 0
+    _moment_ward = 1 << 1
+    _moment_flags_cache: dict[int, int]
+
     psd_blocks: list[PSDConstraints]
     affines: AffineConstraints
     affines_mat: sp.sparse.csr_matrix
@@ -347,9 +371,6 @@ class HubbardCompiler:
     number_up_op: MajoranaOperator
     number_dn_op: MajoranaOperator
 
-    _pruned_cache: set[int]
-    _unpruned_cache: set[int]
-
     def __init__(self, params: HubbardParams):
         self.L = params.L
         self.t = params.t
@@ -359,9 +380,7 @@ class HubbardCompiler:
         self.number_up_op = build_number(params, spin='u')
         self.number_dn_op = build_number(params, spin='d')
         self.number_op = self.number_up_op + self.number_dn_op
-
-        self._pruned_cache = set()
-        self._unpruned_cache = set()
+        self._moment_flags_cache = {}
 
     @staticmethod
     def _moment(monomial1: MajoranaMonomial, monomial2: MajoranaMonomial) -> tuple[MajoranaMonomial, complex]:
@@ -371,48 +390,68 @@ class HubbardCompiler:
         monomial, sign = monomial1.mul(monomial2)
         return monomial, sign * monomial1.dag_phase()
 
-    def _pruned(self, monomial) -> bool:
-        '''
-            return whether the monomial variable is pruned by symmetry
-        '''
+    @staticmethod
+    def _translation_pruned(monomial):
         mask = monomial.mask
-        if mask in self._pruned_cache:
-            return True
-        if mask in self._unpruned_cache:
-            return False
-
-        # Fermion parity
-        if monomial.degree() % 2:
-            self._pruned_cache.add(mask)
-            return True
-
-        # translation invariance
         for r in range(monomial.L):
             rot_mask, sign = monomial._rotate_l(mask, r, return_sign=True)
+            # check if T^\dag(r) O T(r) = -O
             if rot_mask == mask and sign == -1:
-                # check if T^\dag(r) O T(r) = -O
-                self._pruned_cache.add(mask)
                 return True
-
-        self._unpruned_cache.add(mask)
         return False
 
-    def _build_vars(self):
+    def _flag(self, monomial):
+        mask = monomial.mask
+        if mask in self._moment_flags_cache:
+            return self._moment_flags_cache[mask]
+
+        flag = 0
+        if monomial.fermion_parity() == -1 or self._translation_pruned(monomial):
+            self._moment_flags_cache[mask] = flag
+            return flag
+
+        if monomial.k_parity(hermitian=True) == 1:
+            flag |= self._moment_var
+        else:
+            flag |= self._moment_ward
+        self._moment_flags_cache[mask] = flag
+        return flag
+
+    def _is_var(self, monomial):
+        return bool(self._flag(monomial) & self._moment_var)
+
+    def _is_ward(self, monomial):
+        return bool(self._flag(monomial) & self._moment_ward)
+
+    def _is_zero(self, monomial):
+        return not self._is_var(monomial)
+
+    def _build_moments(self):
+        '''
+            build SDP variables and moments for generating Ward identities
+        '''
         self.var_index = {}
         self.vars = []
+        self.ward_index = {}
+        self.ward_moments = []
 
         for monomial1 in self.basis_reprs:
             for r in range(self.L):
                 monomial1r = monomial1.translate(r)
                 for monomial2 in self.basis_reprs:
                     monomial, _ = self._moment(monomial1r, monomial2)
-                    if self._pruned(monomial):
-                        continue
 
-                    key = monomial.canon()
-                    if key not in self.var_index:
-                        self.var_index[key] = len(self.vars)
-                        self.vars.append(MajoranaMonomial(L=self.L, mask=key))
+                    if self._is_var(monomial):
+                        key = monomial.canon()
+                        if key not in self.var_index:
+                            self.var_index[key] = len(self.vars)
+                            self.vars.append(MajoranaMonomial(L=self.L, mask=key))
+
+                    if self._is_ward(monomial):
+                        key = monomial.canon()
+                        if key not in self.ward_index:
+                            self.ward_index[key] = len(self.ward_moments)
+                            self.ward_moments.append(MajoranaMonomial(L=self.L, mask=key))
 
     def _build_psd(self):
         '''
@@ -420,7 +459,9 @@ class HubbardCompiler:
         '''
         self.psd_blocks = []
         dim = len(self.basis_reprs)
-        for n in range(self.L):
+
+        # K symmetry equals M(k) \succcurlyeq 0 and M(-k) \succcurlyeq 0
+        for n in range(self.L//2 + 1):
             k = 2*np.pi * n / self.L
             psd = PSDConstraints(n_vars=len(self.vars), dim=dim)
             for row, monomial1 in enumerate(self.basis_reprs):
@@ -430,9 +471,12 @@ class HubbardCompiler:
                         rot_mask, rot_sign = monomial1._rotate_l(monomial1.mask, r, return_sign=True)
                         monomial1r = MajoranaMonomial(L=self.L, mask=rot_mask)
                         monomial, mul_sign = self._moment(monomial1r, monomial2)
-                        if self._pruned(monomial):
+
+                        if self._is_zero(monomial):
                             continue
                         key, canon_sign = monomial.canon(return_sign=True)
+                        if key not in self.var_index:
+                            raise ValueError(f'monomial <{str(monomial)}> is not an SDP variable')
 
                         # combine Fourier phase, translation/multiplication/canonical signs,
                         # then divide by the hermitian phase so moment variables stay real.
@@ -451,7 +495,7 @@ class HubbardCompiler:
     def _compile_expr(self, op: MajoranaOperator) -> LinearExpr | None:
         expr = {}
         for monomial, coeff in op.terms.items():
-            if self._pruned(monomial):
+            if self._is_zero(monomial):
                 continue
             key, sign = monomial.canon(return_sign=True)
             if key not in self.var_index:
@@ -463,12 +507,11 @@ class HubbardCompiler:
         return LinearExpr(terms=expr, const=0)
 
     def compile(self, basis_reprs: list[MajoranaMonomial]):
-        self._pruned_cache = set()
-        self._unpruned_cache = set()
+        self._moment_flags_cache = {}
 
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ build variables and psd blocks
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ build moments and PSD blocks
         self.basis_reprs = basis_reprs
-        self._build_vars()
+        self._build_moments()
         self._build_psd()
 
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ build hamiltonian
@@ -507,9 +550,7 @@ class HubbardCompiler:
             self.number_dn_op,
         )
         for generator in generators:
-            # parity-even symmetry generators preserve monomial parity, so only parity-even
-            # moment variables can produce nontrivial constraints after odd moments are removed.
-            for monomial in self.vars:
+            for monomial in self.ward_moments:
                 comm_op = generator.commutator(MajoranaOperator({monomial: 1}))
                 expr = self._compile_expr(comm_op)
                 if expr is None:
@@ -532,6 +573,7 @@ class HubbardCompiler:
             'L': self.L,
             'basis_reprs': len(self.basis_reprs),
             'vars': len(self.vars),
+            'ward_moments': len(self.ward_moments),
             'psd_blocks': len(self.psd_blocks),
             'affines_raw': self.affines.n_rows,
             'affines_rank': self.affines_mat.shape[0],
