@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from functools import cached_property
 import numpy as np
 import scipy as sp
 
@@ -14,8 +15,10 @@ class PauliString:
     x_mask: int # bit representation of x operators
     z_mask: int # bit representation of z operators
 
-    # ocanonical representation, unique as the translation-invariant representative
-    _canon: int | None
+    # canonical representation, unique as the translation-invariant representative
+    canon: int
+    canon_rep: 'PauliString'
+    period: int
 
     def __init__(self, pstr: str):
         self.L = len(pstr)
@@ -26,7 +29,6 @@ class PauliString:
                 self.x_mask |= 1 << i
             if pauli in 'ZY':
                 self.z_mask |= 1 << i
-        self._canon = None
 
     @classmethod
     def _from_masks(cls, L: int, x_mask: int, z_mask: int):
@@ -34,7 +36,6 @@ class PauliString:
         pstr.L = L
         pstr.x_mask = x_mask
         pstr.z_mask = z_mask
-        pstr._canon = None
         return pstr
     
     def _rotate_l(self, mask: int, shift: int) -> int:
@@ -47,25 +48,41 @@ class PauliString:
     def _pack(self, x_mask: int, z_mask: int) -> int:
         return (x_mask << self.L) | z_mask
 
+    @cached_property
     def canon(self) -> int:
-        if self._canon is not None:
-            return self._canon
-
-        self._canon = self._pack(self.x_mask, self.z_mask)
+        canon = self._pack(self.x_mask, self.z_mask)
         for shift in range(1, self.L):
             x_rot = self._rotate_l(self.x_mask, shift)
             z_rot = self._rotate_l(self.z_mask, shift)
             cand = self._pack(x_rot, z_rot)
-            if cand < self._canon:
-                self._canon = cand
-        return self._canon
+            if cand < canon:
+                canon = cand
+        return canon
+
+    @cached_property
+    def canon_rep(self):
+        key = self.canon
+        for shift in range(self.L):
+            pstr = self.translate(shift)
+            if self._pack(pstr.x_mask, pstr.z_mask) == key:
+                return pstr
+        return self
+
+    @cached_property
+    def period(self) -> int:
+        for shift in range(1, self.L):
+            if (
+                self._rotate_l(self.x_mask, shift) == self.x_mask and
+                self._rotate_l(self.z_mask, shift) == self.z_mask
+            ):
+                return shift
+        return self.L
 
     def translate(self, shift: int):
         pstr = PauliString.__new__(PauliString)
         pstr.L = self.L
         pstr.x_mask = self._rotate_l(self.x_mask, shift)
         pstr.z_mask = self._rotate_l(self.z_mask, shift)
-        pstr._canon = self._canon
         return pstr
 
     def __eq__(self, other):
@@ -234,6 +251,7 @@ def build_hamil(params: IsingParams):
 
 
 class IsingCompiler:
+    L: int
     params: IsingParams
 
     '''
@@ -262,7 +280,8 @@ class IsingCompiler:
         var_index:    map between canonical PauliString indices and variable indices
         ward_moments: K-odd moment Pauli strings for generating Ward identities
         ward_index:   map between canonical PauliString indices and Ward moment indices
-        psd_blocks:   moment PSD blocks
+        block_reprs:  representative basis involved in each momentum PSD block
+        psd_blocks:   momentum PSD blocks
         affines:      affine constraints
         affines_mat:  affine constraints in terms of a sparse matrix
     '''
@@ -273,7 +292,9 @@ class IsingCompiler:
     ward_index: dict[int, int]
     ward_moments: list[PauliString]
 
+    block_reprs: list[list[PauliString]]
     psd_blocks: list[PSDConstraints]
+
     affines: AffineConstraints
     affines_mat: sp.sparse.csr_matrix
 
@@ -282,8 +303,7 @@ class IsingCompiler:
 
     def __init__(self, params: IsingParams):
         self.L = params.L
-        self.J = params.J
-        self.h = params.h
+        self.params = params
         self.hamil_op = build_hamil(params)
 
     def _build_moments(self):
@@ -309,11 +329,11 @@ class IsingCompiler:
         self.ward_index = {}
 
         for pstr1 in self.basis_reprs:
-            for r in range(self.L):
+            for r in range(pstr1.period):
                 pstr1r = pstr1.translate(r)
                 for pstr2 in self.basis_reprs:
                     pstr, _ = pstr1r.dag().mul(pstr2)
-                    key = pstr.canon()
+                    key = pstr.canon
 
                     if pstr.parity() == 1:
                         if key not in self.var_index:
@@ -324,12 +344,23 @@ class IsingCompiler:
                             self.ward_index[key] = len(self.ward_moments)
                             self.ward_moments.append(pstr)
 
+    def _build_block_reprs(self):
+        '''
+            for a pauli string with period L_a < L,
+            allowed momentum satisfy e^{-i k L_a} = 1 such that n L_a/L = m
+        '''
+        self.block_reprs = []
+        for n in range(self.L//2 + 1):
+            self.block_reprs.append([
+                pstr for pstr in self.basis_reprs
+                if (n * pstr.period) % self.L == 0
+            ])
+
     def _build_psd(self):
         '''
             build momentum PSD blocks M(k)
         '''
         self.psd_blocks = []
-        dim = len(self.basis_reprs)
 
         r'''
             K symmetry imposes that M(-k) = diag(eta) M(k)^\ast diag(eta)
@@ -337,19 +368,22 @@ class IsingCompiler:
         '''
         for n in range(self.L//2 + 1):
             k = 2*np.pi * n / self.L
+            block_basis = self.block_reprs[n]
+            dim = len(block_basis)
             psd = PSDConstraints(n_vars=len(self.vars), dim=dim)
 
-            for row, pstr1 in enumerate(self.basis_reprs):
-                for col, pstr2 in enumerate(self.basis_reprs):
+            for row, pstr1 in enumerate(block_basis):
+                period = pstr1.period
+                for col, pstr2 in enumerate(block_basis):
                     expr = {}
-                    for r in range(self.L):
+                    for r in range(period):
                         pstr1r = pstr1.translate(r)
                         pstr, phase = pstr1r.dag().mul(pstr2)
                         if pstr.parity() == -1:
                             continue
 
-                        idx = self.var_index[pstr.canon()]
-                        coeff = np.exp(1j * k * r) * phase / self.L
+                        idx = self.var_index[pstr.canon]
+                        coeff = np.exp(1j * k * r) * phase / period
                         expr[idx] = expr.get(idx, 0) + coeff
                         if abs(expr[idx]) < 1e-12:
                             del expr[idx]
@@ -357,10 +391,28 @@ class IsingCompiler:
 
             self.psd_blocks.append(psd)
 
+    def _build_affines(self):
+        self.affines = AffineConstraints(n_vars=len(self.vars))
+
+        # normalization constraint, <I> == 1
+        id_key = PauliString('I'*self.L).canon
+        if id_key not in self.var_index:
+            raise ValueError('current basis cannot represent the identity operator')
+        self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
+
+        for pstr in self.ward_moments:
+            comm_op = self.hamil_op.commutator(IsingOperator({pstr: 1}))
+            expr = self._compile_expr(comm_op)
+            if expr is None:
+                continue
+            self.affines.add(expr)
+
+        self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-10)
+
     def _compile_expr(self, op: IsingOperator) -> LinearExpr | None:
         expr = {}
         for pstr, coeff in op.terms.items():
-            key = pstr.canon()
+            key = pstr.canon
             if key not in self.var_index:
                 if pstr.parity() == -1:
                     continue
@@ -375,42 +427,21 @@ class IsingCompiler:
         '''
             basis: list of translation-invariant representative Pauli strings with reduced length
         '''
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ build basis
         for pstr in basis:
             if len(pstr) > self.L:
                 raise ValueError('Pauli string length exceeds system size L')
 
         self.basis_reprs = [PauliString(pstr+'I'*(self.L-len(pstr))) for pstr in basis]
-
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct moment variables
         self._build_moments()
-
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct momentum PSD blocks
+        self._build_block_reprs()
         self._build_psd()
         
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct hamiltonian
         self.hamil_expr = self._compile_expr(self.hamil_op)
         # hamiltonian must be representable in the current moment variable space
         if self.hamil_expr is None:
             raise ValueError('current basis cannot represent the Hamiltonian')
         
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construct affine constraints
-        self.affines = AffineConstraints(n_vars=len(self.vars))
-
-        # normalization constraint, <I> == 1
-        id_key = PauliString('I'*self.L).canon()
-        if id_key not in self.var_index:
-            raise ValueError('current basis cannot represent the identity operator')
-        self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
-
-        for pstr in self.ward_moments:
-            comm_op = self.hamil_op.commutator(IsingOperator({pstr: 1}))
-            expr = self._compile_expr(comm_op)
-            if expr is None:
-                continue
-            self.affines.add(expr)
-
-        self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-10)
+        self._build_affines()
 
     def _get_expr_str(self, expr: LinearExpr) -> str:
         parts = [
@@ -423,11 +454,13 @@ class IsingCompiler:
 
     def summary(self):
         return {
-            'L': self.L,
+            'params': self.params,
             'basis_reprs': len(self.basis_reprs),
             'vars': len(self.vars),
             'ward_moments': len(self.ward_moments),
             'psd_blocks': len(self.psd_blocks),
+            'psd_dims_sum': sum(psd.dim for psd in self.psd_blocks),
+            'psd_dims': [psd.dim for psd in self.psd_blocks],
             'affines_raw': self.affines.n_rows,
             'affines_rank': self.affines_mat.shape[0],
             'hamil_expr': self._get_expr_str(self.hamil_expr),
@@ -448,7 +481,7 @@ if __name__ == '__main__':
     # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
     pstr1 = PauliString(pstr='IXYZZZII')
     pstr2 = PauliString(pstr='ZZZIIIXY')
-    print(pstr1.canon(), pstr2.canon())
+    print(pstr1.canon, pstr2.canon)
 
     print(pstr1)
     print(pstr2)

@@ -143,6 +143,7 @@ class SDPData:
 class SDPSolver:
     def __init__(self):
         self.vars = None
+        self.psd_exprs = None
         self.constraints = None
         self.problem = None
         self.objective = None
@@ -154,8 +155,11 @@ class SDPSolver:
         self.constraints = []
 
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ PSD constraints
+        self.psd_exprs = []
         for block in data.psd_blocks:
-            self.constraints.append(block.matrix_expr(self.vars) >> 0)
+            expr = block.matrix_expr(self.vars)
+            self.psd_exprs.append(expr)
+            self.constraints.append(expr >> 0)
 
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ affine constraints
         if data.affines_mat.shape[0] > 0:
@@ -174,10 +178,10 @@ class SDPSolver:
         self.problem = cp.Problem(self.objective, self.constraints)
         return self.problem
 
-    def solve(self, solver: str = 'SCS', **kwargs):
+    def solve(self, backend: str = 'SCS', **kwargs):
         if self.problem is None:
             raise ValueError('problem has not been built')
-        value = self.problem.solve(solver=solver, **kwargs)
+        value = self.problem.solve(solver=backend, **kwargs)
         self.status = self.problem.status
         return value
 
@@ -211,7 +215,7 @@ if __name__ == '__main__':
 
     solver = SDPSolver()
     solver.build(compiler.sdp_data())
-    solver.solve(solver='SCS', eps=1e-4, max_iters=10_000)
+    solver.solve(backend='SCS', eps=1e-4, max_iters=10_000)
 
     print(solver.problem.value)
     print(solver.problem.status)

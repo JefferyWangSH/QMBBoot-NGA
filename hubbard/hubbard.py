@@ -338,6 +338,7 @@ def build_number(params: HubbardParams, spin: str|None = None):
 
 
 class HubbardCompiler:
+    L: int
     params: HubbardParams
 
     basis_reprs: list[MajoranaMonomial]
@@ -373,8 +374,7 @@ class HubbardCompiler:
 
     def __init__(self, params: HubbardParams):
         self.L = params.L
-        self.t = params.t
-        self.U = params.U
+        self.params = params
         self.n_particles = params.n_particles
         self.hamil_op = build_hamil(params)
         self.number_up_op = build_number(params, spin='u')
@@ -570,7 +570,7 @@ class HubbardCompiler:
 
     def summary(self):
         return {
-            'L': self.L,
+            'params': self.params,
             'basis_reprs': len(self.basis_reprs),
             'vars': len(self.vars),
             'ward_moments': len(self.ward_moments),

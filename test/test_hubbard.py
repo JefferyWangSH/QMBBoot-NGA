@@ -14,6 +14,6 @@ if __name__ == '__main__':
 
     solver = SDPSolver()
     solver.build(compiler.sdp_data())
-    value = solver.solve(solver='SCS', eps=1e-4, max_iters=5_000)
+    value = solver.solve(backend='SCS', eps=1e-4, max_iters=5_000)
     print(value)
     print(solver.summary())
