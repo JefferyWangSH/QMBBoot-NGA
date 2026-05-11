@@ -423,15 +423,12 @@ class IsingCompiler:
                 del expr[idx]
         return LinearExpr(terms=expr, const=0)
 
-    def compile(self, basis: list[str]):
-        '''
-            basis: list of translation-invariant representative Pauli strings with reduced length
-        '''
-        for pstr in basis:
-            if len(pstr) > self.L:
-                raise ValueError('Pauli string length exceeds system size L')
+    def compile(self, basis_reprs: list[PauliString]):
+        self.basis_reprs = list(basis_reprs)
+        for pstr in self.basis_reprs:
+            if pstr.L != self.L:
+                raise ValueError('Pauli string length inconsistent with system size L')
 
-        self.basis_reprs = [PauliString(pstr+'I'*(self.L-len(pstr))) for pstr in basis]
         self._build_moments()
         self._build_block_reprs()
         self._build_psd()
@@ -442,6 +439,17 @@ class IsingCompiler:
             raise ValueError('current basis cannot represent the Hamiltonian')
         
         self._build_affines()
+
+    def fourier(self, pstr: PauliString, n: int):
+        if (n * pstr.period) % self.L != 0:
+            raise ValueError('momentum incompatible with Pauli string period')
+
+        k = 2*np.pi * n / self.L
+        op = IsingOperator()
+        norm = np.sqrt(pstr.period)
+        for shift in range(pstr.period):
+            op.add(pstr.translate(shift), np.exp(-1j * k * shift) / norm)
+        return op
 
     def _get_expr_str(self, expr: LinearExpr) -> str:
         parts = [
@@ -476,6 +484,15 @@ class IsingCompiler:
         )
 
 
+def build_basis_reprs(L: int, basis: list[str]) -> list[PauliString]:
+    basis_reprs = []
+    for pstr in basis:
+        if len(pstr) > L:
+            raise ValueError('Pauli string length exceeds system size L')
+        basis_reprs.append(PauliString(pstr + 'I'*(L - len(pstr))))
+    return basis_reprs
+
+
 if __name__ == '__main__':
 
     # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
@@ -495,7 +512,7 @@ if __name__ == '__main__':
 
     # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
     compiler = IsingCompiler(params=IsingParams())
-    compiler.compile(basis=['I', 'X', 'Y', 'Z', 'ZZ'])
+    compiler.compile(basis_reprs=build_basis_reprs(compiler.L, ['I', 'X', 'Y', 'Z', 'ZZ']))
     print(*compiler.basis_reprs)
     print(len(compiler.vars))
     print(*compiler.vars)

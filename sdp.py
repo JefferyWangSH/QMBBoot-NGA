@@ -200,7 +200,7 @@ class SDPSolver:
 
 if __name__ == '__main__':
 
-    from ising.ising import IsingParams, IsingCompiler
+    from ising.ising import IsingParams, IsingCompiler, build_basis_reprs
 
     params=IsingParams(L=16, J=1., h=1.)
     basis0 = ['I', 'X', 'Y', 'Z', 'ZZ']
@@ -209,7 +209,7 @@ if __name__ == '__main__':
 
     compiler = IsingCompiler(params=params)
     compiler.compile(
-        basis=basis1 # basis0, basis1, basis2
+        basis_reprs=build_basis_reprs(params.L, basis1) # basis0, basis1, basis2
     )
     print(compiler.summary())
 
