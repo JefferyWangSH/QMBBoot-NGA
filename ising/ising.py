@@ -366,11 +366,9 @@ class IsingCompiler:
             K symmetry imposes that M(-k) = diag(eta) M(k)^\ast diag(eta)
             therefore the number of independent momentum PSD blocks can be reduced by half
         '''
-        for n in range(self.L//2 + 1):
+        for n, block_basis in enumerate(self.block_reprs):
             k = 2*np.pi * n / self.L
-            block_basis = self.block_reprs[n]
-            dim = len(block_basis)
-            psd = PSDConstraints(n_vars=len(self.vars), dim=dim)
+            psd = PSDConstraints(n_vars=len(self.vars), dim=len(block_basis))
 
             for row, pstr1 in enumerate(block_basis):
                 period = pstr1.period
