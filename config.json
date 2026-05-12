@@ -1,0 +1,26 @@
+{
+  "model": {
+    "L": 10,
+    "t": 1.0,
+    "U": 4.0,
+    "n_particles": 10
+  },
+  "nga": {
+    "solver_backend": "SCS",
+    "solver_kwargs": {
+      "eps": 1e-5,
+      "max_iters": 5000
+    },
+    "drop_null_tol": 1e-5,
+    "grow_null_tol": 1e-6,
+    "max_drop_leverage": 5e-2,
+    "min_net_growth_per_step": 1,
+    "max_net_growth_per_step": 8,
+    "max_drop_per_step": 4
+  },
+  "initial_basis": {
+    "max_degree": 4,
+    "max_support": 1,
+    "max_diameter": 0
+  }
+}

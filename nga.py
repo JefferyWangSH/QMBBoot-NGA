@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 import numpy as np
 
 from sdp import SDPSolver
@@ -10,11 +10,23 @@ class NGARecord:
     basis_reps: int | None = None
     psd_dims: list[int] | None = None
     n_vars: int | None = None
-    null_count: int | None = None
-    max_null_eigval: float | None = None
+    affine_rank: int | None = None
+    drop_null_count: int | None = None
+    grow_null_count: int | None = None
+    max_drop_null_eigval: float | None = None
+    max_grow_null_eigval: float | None = None
     to_drop: int | None = None
     to_grow: int | None = None
     net_growth: int | None = None
+
+    def to_dict(self):
+        data = {}
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if hasattr(value, 'item'):
+                value = value.item()
+            data[field.name] = value
+        return data
 
 
 class NGARunner:
@@ -46,8 +58,8 @@ class NGARunner:
         required_basis_reprs,
         solver_backend='MOSEK',
         solver_kwargs=None,
-        null_tol=1e-9,
-        descendant_tol=1e-5,
+        drop_null_tol=1e-9,
+        grow_null_tol=1e-9,
         max_drop_leverage=1e-2,
         min_net_growth_per_step=1,
         max_net_growth_per_step=4,
@@ -72,8 +84,8 @@ class NGARunner:
 
         self.solver_backend = solver_backend
         self.solver_kwargs = solver_kwargs or {}
-        self.null_tol = null_tol
-        self.descendant_tol = descendant_tol
+        self.drop_null_tol = drop_null_tol
+        self.grow_null_tol = grow_null_tol
         self.max_drop_leverage = max_drop_leverage
         self.min_net_growth_per_step = min_net_growth_per_step
         self.max_net_growth_per_step = max_net_growth_per_step
@@ -92,14 +104,13 @@ class NGARunner:
         self.to_drop = []
         self.to_grow = []
 
-        self.null_count = 0
-        self.max_null_eigval = None
-
     def build(self):
         self.compiler.compile(self.basis_reprs)
         self.solver.build(self.compiler.sdp_data())
-        self.record.psd_dims = [psd.dim for psd in self.compiler.psd_blocks]
-        self.record.n_vars = len(self.compiler.vars)
+        summary = self.compiler.summary()
+        self.record.psd_dims = summary['psd_dims']
+        self.record.n_vars = summary['vars']
+        self.record.affine_rank = summary['affines_rank']
 
     def solve(self):
         value = self.solver.solve(backend=self.solver_backend, **self.solver_kwargs)
@@ -127,7 +138,7 @@ class NGARunner:
             self.psd_eigvals,
             self.psd_eigvecs,
         ):
-            null_mask = (0 <= eigvals) & (eigvals <= self.null_tol)
+            null_mask = (0 <= eigvals) & (eigvals <= self.drop_null_tol)
             if np.count_nonzero(null_mask) == 0:
                 continue
 
@@ -145,16 +156,15 @@ class NGARunner:
                 idx = self.basis_indices[rep.canon]
                 self.leverage[idx] += float(score)
 
-        self.null_count = len(null_eigvals)
-        if self.null_count == 0:
+        null_count = len(null_eigvals)
+        if null_count == 0:
             self.to_drop = []
-            self.max_null_eigval = None
-            self.record.null_count = self.null_count
-            self.record.max_null_eigval = self.max_null_eigval
+            self.record.drop_null_count = 0
+            self.record.max_drop_null_eigval = None
             return self.to_drop
 
-        self.leverage /= self.null_count
-        self.max_null_eigval = float(np.max(null_eigvals)) if null_eigvals else None
+        self.leverage /= null_count
+        max_null_eigval = float(np.max(null_eigvals)) if null_eigvals else None
 
         candidates = [
             (score, rep.canon)
@@ -166,15 +176,15 @@ class NGARunner:
         candidates.sort()
         self.to_drop = [key for _, key in candidates[:self.max_drop_per_step]]
 
-        self.record.null_count = self.null_count
-        self.record.max_null_eigval = self.max_null_eigval
+        self.record.drop_null_count = null_count
+        self.record.max_drop_null_eigval = max_null_eigval
         return self.to_drop
 
     def proposed_grow(self):
         if not self.psd_eigvals or not self.psd_eigvecs:
             raise ValueError('diagonalize psd blocks first')
 
-        known_keys = set(self.basis_indices)
+        basis_keys = set(self.basis_indices)
         target_growth = len(self.to_drop) + self.max_net_growth_per_step
         self.to_grow = []
 
@@ -182,10 +192,17 @@ class NGARunner:
         null_dirs = []
         for block_idx, eigvals in enumerate(self.psd_eigvals):
             # momentum-block nullspace indices (ascending)
-            null_indices = np.flatnonzero((0 <= eigvals) & (eigvals <= self.null_tol))
+            null_indices = np.flatnonzero((0 <= eigvals) & (eigvals <= self.grow_null_tol))
             for eig_idx in null_indices:
                 null_dirs.append((eigvals[eig_idx], block_idx, eig_idx))
         null_dirs.sort()
+        null_count = len(null_dirs)
+        max_null_eigval = float(max((eigval for eigval, _, _ in null_dirs), default=0)) if null_dirs else None
+        self.record.grow_null_count = null_count
+        self.record.max_grow_null_eigval = max_null_eigval
+
+        candidate_scores = {}
+        candidate_reps = {}
 
         for _, block_idx, eig_idx in null_dirs:
             # build the null operator
@@ -200,18 +217,17 @@ class NGARunner:
             # descendants
             desc = self.compiler.hamil_op.commutator(op)
             for pstr, coeff in desc.terms.items():
-                if abs(coeff) < self.descendant_tol:
-                    continue
                 key = pstr.canon
-                if key in known_keys:
+                if key in basis_keys:
                     continue
-                known_keys.add(key)
-                self.to_grow.append(pstr.canon_rep)
-                if len(self.to_grow) >= target_growth:
-                    break
-            if len(self.to_grow) >= target_growth:
-                break
+                candidate_scores[key] = candidate_scores.get(key, 0) + float(abs(coeff))
+                candidate_reps[key] = pstr.canon_rep
 
+        candidates = sorted(
+            candidate_scores,
+            key=lambda key: (-candidate_scores[key], key),
+        )
+        self.to_grow = [candidate_reps[key] for key in candidates[:target_growth]]
         return self.to_grow
 
     def update(self):
@@ -257,8 +273,8 @@ if __name__ == '__main__':
         basis_reprs=basis_reprs,
         required_basis_reprs=required_basis_reprs,
         solver_backend='MOSEK',
-        null_tol=1e-8,
-        descendant_tol=1e-5,
+        drop_null_tol=1e-8,
+        grow_null_tol=1e-8,
         max_drop_leverage=5e-2,
         min_net_growth_per_step=1,
         max_net_growth_per_step=4,
