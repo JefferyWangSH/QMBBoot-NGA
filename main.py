@@ -8,7 +8,7 @@ from hubbard.hubbard import (
     HubbardCompiler, HubbardParams, MajoranaMonomial,
     load_basis_reprs
 )
-from nga import NGARunner
+from nga import NGAParams, NGARunner
 
 default_config = {
     'model': {
@@ -24,7 +24,8 @@ default_config = {
         'max_drop_leverage': 5e-2,
         'min_net_growth_per_step': 1,
         'max_net_growth_per_step': 8,
-        'max_drop_per_step': 4,
+        'drop_cap_base_per_step': 8,
+        'drop_cap_rate': 0.15,
     },
     'initial_basis': {
         'max_degree': 4,
@@ -56,10 +57,12 @@ if __name__ == '__main__':
     required_basis = [MajoranaMonomial.from_str(params.L, s) for s in required]
     output_basis = args.output_dir / 'basis.json'
     output_state = args.output_dir / 'state.json'
+    output_events = args.output_dir / 'events.json'
 
     if args.resume:
         resume_basis = args.resume / 'basis.json'
         resume_state = args.resume / 'state.json'
+        resume_events = args.resume / 'events.json'
         state = json.loads(resume_state.read_text())
         if state['params'] != asdict(params):
             raise ValueError('resume state model parameters do not match config')
@@ -67,6 +70,7 @@ if __name__ == '__main__':
         basis = [MajoranaMonomial.from_str(params.L, s).canon_rep for s in strings]
         start_step = state.get('step', -1) + 1
         records = state.get('records', [])
+        events = json.loads(resume_events.read_text()) if resume_events.exists() else {'steps': []}
     else:
         basis = load_basis_reprs(
             params.L,
@@ -75,18 +79,27 @@ if __name__ == '__main__':
             max_diameter=initial_basis_config['max_diameter'],
         )
         start_step, records = 0, []
+        events = {
+            'initial_basis': [str(rep.canon_rep) for rep in basis],
+            'steps': [],
+        }
 
     runner = NGARunner(
         compiler=HubbardCompiler(params),
         basis_reprs=basis,
         required_basis_reprs=required_basis,
-        **nga_config,
+        nga_params=NGAParams(**nga_config),
     )
 
     t0 = time.perf_counter()
     for step in range(start_step, start_step + args.steps):
         s0 = time.perf_counter()
         _, record = runner.step()
+        events['steps'].append({
+            'step': step,
+            'drop': [str(MajoranaMonomial(params.L, key).canon_rep) for key in runner.to_drop],
+            'grow': [str(rep.canon_rep) for rep in runner.to_grow],
+        })
         record = record.to_dict()
         records.append(record)
 
@@ -94,6 +107,7 @@ if __name__ == '__main__':
         output_basis.write_text(
             json.dumps([str(rep.canon_rep) for rep in runner.basis_reprs], indent=2)
         )
+        output_events.write_text(json.dumps(events, indent=2))
 
         output_state.parent.mkdir(parents=True, exist_ok=True)
         data = {

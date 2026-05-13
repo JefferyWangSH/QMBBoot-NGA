@@ -1,7 +1,35 @@
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
+import math
 import numpy as np
 
 from sdp import SDPSolver
+
+@dataclass(slots=True)
+class NGAParams:
+    solver_backend: str = 'MOSEK'
+    solver_kwargs: dict = field(default_factory=dict)
+    drop_null_tol: float = 1e-9
+    grow_null_tol: float = 1e-9
+    max_drop_leverage: float = 1e-2
+    min_net_growth_per_step: int = 1
+    max_net_growth_per_step: int = 8
+    # max number of basis drop per step given by
+    # max(drop_cap_base_per_step, drop_cap_rate * len(basis_reprs))
+    drop_cap_base_per_step: int = 8
+    drop_cap_rate: float = 0.1
+
+    def to_dict(self):
+        return {
+            'solver_backend': self.solver_backend,
+            'solver_kwargs': dict(self.solver_kwargs),
+            'drop_null_tol': self.drop_null_tol,
+            'grow_null_tol': self.grow_null_tol,
+            'max_drop_leverage': self.max_drop_leverage,
+            'min_net_growth_per_step': self.min_net_growth_per_step,
+            'max_net_growth_per_step': self.max_net_growth_per_step,
+            'drop_cap_base_per_step': self.drop_cap_base_per_step,
+            'drop_cap_rate': self.drop_cap_rate,
+        }
 
 @dataclass(slots=True)
 class NGARecord:
@@ -18,6 +46,7 @@ class NGARecord:
     to_drop: int | None = None
     to_grow: int | None = None
     net_growth: int | None = None
+    nga_params: dict | None = None
 
     def to_dict(self):
         data = {}
@@ -56,14 +85,7 @@ class NGARunner:
         compiler,
         basis_reprs,
         required_basis_reprs,
-        solver_backend='MOSEK',
-        solver_kwargs=None,
-        drop_null_tol=1e-9,
-        grow_null_tol=1e-9,
-        max_drop_leverage=1e-2,
-        min_net_growth_per_step=1,
-        max_net_growth_per_step=4,
-        max_drop_per_step=8,
+        nga_params: NGAParams,
     ):
         self.compiler = compiler
 
@@ -78,21 +100,15 @@ class NGARunner:
             self.basis_reprs.append(rep)
 
         self.basis_indices = {rep.canon: idx for idx, rep in enumerate(self.basis_reprs)}
-        self.required_keys = {rep.canon for rep in required_basis_reprs}
+        self.required_basis_reprs = [rep.canon_rep for rep in required_basis_reprs]
+        self.required_keys = {rep.canon for rep in self.required_basis_reprs}
         if self.required_keys - set(self.basis_indices):
             raise ValueError('required basis representatives must be included in basis_reprs')
 
-        self.solver_backend = solver_backend
-        self.solver_kwargs = solver_kwargs or {}
-        self.drop_null_tol = drop_null_tol
-        self.grow_null_tol = grow_null_tol
-        self.max_drop_leverage = max_drop_leverage
-        self.min_net_growth_per_step = min_net_growth_per_step
-        self.max_net_growth_per_step = max_net_growth_per_step
-        self.max_drop_per_step = max_drop_per_step
+        self.nga_params = nga_params
 
         self.solver = SDPSolver()
-        self.record = NGARecord(basis_reps = len(self.basis_reprs))
+        self._reset_record()
         self.history = []
 
         self.psd_eigvals = []
@@ -104,6 +120,16 @@ class NGARunner:
         self.to_drop = []
         self.to_grow = []
 
+    def _reset_record(self):
+        nga_params_record = self.nga_params.to_dict()
+        nga_params_record['required_basis_reprs'] = [
+            str(rep.canon_rep) for rep in self.required_basis_reprs
+        ]
+        self.record = NGARecord(
+            basis_reps = len(self.basis_reprs),
+            nga_params = nga_params_record,
+        )
+
     def build(self):
         self.compiler.compile(self.basis_reprs)
         self.solver.build(self.compiler.sdp_data())
@@ -113,7 +139,10 @@ class NGARunner:
         self.record.affine_rank = summary['affines_rank']
 
     def solve(self):
-        value = self.solver.solve(backend=self.solver_backend, **self.solver_kwargs)
+        value = self.solver.solve(
+            backend=self.nga_params.solver_backend,
+            **self.nga_params.solver_kwargs,
+        )
         self.record.value = value
         self.record.status = self.solver.status
 
@@ -138,7 +167,7 @@ class NGARunner:
             self.psd_eigvals,
             self.psd_eigvecs,
         ):
-            null_mask = (0 <= eigvals) & (eigvals <= self.drop_null_tol)
+            null_mask = (0 <= eigvals) & (eigvals <= self.nga_params.drop_null_tol)
             if np.count_nonzero(null_mask) == 0:
                 continue
 
@@ -170,11 +199,15 @@ class NGARunner:
             (score, rep.canon)
             for rep, score in zip(self.basis_reprs, self.leverage)
             if rep.canon not in self.required_keys
-            and score < self.max_drop_leverage
+            and score < self.nga_params.max_drop_leverage
         ]
         # sorted by leverages in nullspace (ascending)
         candidates.sort()
-        self.to_drop = [key for _, key in candidates[:self.max_drop_per_step]]
+        drop_cap = max(
+            self.nga_params.drop_cap_base_per_step,
+            math.ceil(self.nga_params.drop_cap_rate * len(self.basis_reprs)),
+        )
+        self.to_drop = [key for _, key in candidates[:drop_cap]]
 
         self.record.drop_null_count = null_count
         self.record.max_drop_null_eigval = max_null_eigval
@@ -185,14 +218,14 @@ class NGARunner:
             raise ValueError('diagonalize psd blocks first')
 
         basis_keys = set(self.basis_indices)
-        target_growth = len(self.to_drop) + self.max_net_growth_per_step
+        target_growth = len(self.to_drop) + self.nga_params.max_net_growth_per_step
         self.to_grow = []
 
         # sort nullspace eigvals across all blocks
         null_dirs = []
         for block_idx, eigvals in enumerate(self.psd_eigvals):
             # momentum-block nullspace indices (ascending)
-            null_indices = np.flatnonzero((0 <= eigvals) & (eigvals <= self.grow_null_tol))
+            null_indices = np.flatnonzero((0 <= eigvals) & (eigvals <= self.nga_params.grow_null_tol))
             for eig_idx in null_indices:
                 null_dirs.append((eigvals[eig_idx], block_idx, eig_idx))
         null_dirs.sort()
@@ -232,7 +265,7 @@ class NGARunner:
 
     def update(self):
         while (
-            len(self.to_grow)-len(self.to_drop) < self.min_net_growth_per_step
+            len(self.to_grow)-len(self.to_drop) < self.nga_params.min_net_growth_per_step
             and self.to_drop
         ):
             # pop from the right (lowest priority)
@@ -247,7 +280,7 @@ class NGARunner:
         self.record.to_grow = len(self.to_grow)
         self.record.net_growth = len(self.to_grow) - len(self.to_drop)
         self.history.append(self.record)
-        self.record = NGARecord(basis_reps=len(self.basis_reprs))
+        self._reset_record()
 
     def step(self):
         self.build()
@@ -272,13 +305,16 @@ if __name__ == '__main__':
         compiler=IsingCompiler(params),
         basis_reprs=basis_reprs,
         required_basis_reprs=required_basis_reprs,
-        solver_backend='MOSEK',
-        drop_null_tol=1e-8,
-        grow_null_tol=1e-8,
-        max_drop_leverage=5e-2,
-        min_net_growth_per_step=1,
-        max_net_growth_per_step=4,
-        max_drop_per_step=8,
+        nga_params=NGAParams(
+            solver_backend='MOSEK',
+            drop_null_tol=1e-8,
+            grow_null_tol=1e-8,
+            max_drop_leverage=5e-2,
+            min_net_growth_per_step=1,
+            max_net_growth_per_step=8,
+            drop_cap_base_per_step=8,
+            drop_cap_rate=0.1,
+        ),
     )
 
     n_steps = 10
