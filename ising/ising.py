@@ -344,6 +344,10 @@ class IsingCompiler:
                             self.ward_index[key] = len(self.ward_moments)
                             self.ward_moments.append(pstr)
 
+    @staticmethod
+    def nonzero_fourier(pstr: PauliString, n: int) -> bool:
+        return (n * pstr.period) % pstr.L == 0
+
     def _build_block_reprs(self):
         '''
             for a pauli string with period L_a < L,
@@ -353,7 +357,7 @@ class IsingCompiler:
         for n in range(self.L//2 + 1):
             self.block_reprs.append([
                 pstr for pstr in self.basis_reprs
-                if (n * pstr.period) % self.L == 0
+                if self.nonzero_fourier(pstr, n)
             ])
 
     def _build_psd(self):
@@ -371,17 +375,16 @@ class IsingCompiler:
             psd = PSDConstraints(n_vars=len(self.vars), dim=len(block_basis))
 
             for row, pstr1 in enumerate(block_basis):
-                period = pstr1.period
                 for col, pstr2 in enumerate(block_basis):
                     expr = {}
-                    for r in range(period):
+                    for r in range(self.L):
                         pstr1r = pstr1.translate(r)
                         pstr, phase = pstr1r.dag().mul(pstr2)
                         if pstr.parity() == -1:
                             continue
 
                         idx = self.var_index[pstr.canon]
-                        coeff = np.exp(1j * k * r) * phase / period
+                        coeff = np.exp(1j * k * r) * phase / self.L
                         expr[idx] = expr.get(idx, 0) + coeff
                         if abs(expr[idx]) < 1e-12:
                             del expr[idx]
@@ -438,16 +441,34 @@ class IsingCompiler:
         
         self._build_affines()
 
-    def fourier(self, pstr: PauliString, n: int):
-        if (n * pstr.period) % self.L != 0:
-            raise ValueError('momentum incompatible with Pauli string period')
+    def local_comm(self, pstr: PauliString):
+        r'''
+            calculate
 
-        k = 2*np.pi * n / self.L
-        op = IsingOperator()
-        norm = np.sqrt(pstr.period)
-        for shift in range(pstr.period):
-            op.add(pstr.translate(shift), np.exp(-1j * k * shift) / norm)
-        return op
+                C_a = [H, O_a(0)] = \sum_{b,s} C_{ab}(s) T_s O'(0)_b
+
+            as entry list [(O'(0)_b, s, C_{ab}(s)), ...]
+        '''
+        entries = {}
+        local_comm = self.hamil_op.commutator(IsingOperator({pstr: 1}))
+
+        for desc, coeff in local_comm.terms.items():
+            desc_rep = desc.canon_rep
+            s = 0
+            for shift in range(desc.L):
+                if desc_rep.translate(shift) == desc:
+                    s = shift
+                    break
+
+            key = (desc_rep, s)
+            entries[key] = entries.get(key, 0) + coeff
+            if entries[key] == 0:
+                del entries[key]
+
+        return [
+            (desc_rep, s, coeff)
+            for (desc_rep, s), coeff in entries.items()
+        ]
 
     def _get_expr_str(self, expr: LinearExpr) -> str:
         parts = [

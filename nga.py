@@ -1,6 +1,9 @@
 from dataclasses import dataclass, field, fields
+from functools import cache
 import math
+
 import numpy as np
+import scipy as sp
 
 from sdp import SDPSolver
 
@@ -67,18 +70,14 @@ class NGARunner:
             BasisRep.canon
             BasisRep.canon_rep
 
-            Operator.__add__
-            Operator.__rmul__
-            Operator.commutator(op: Operator) -> Operator
-
             Compiler.block_reprs: list[list[BasisRep]]
             Compiler.psd_blocks: list[PSDConstraints]
             Compiler.vars: list
-            Compiler.hamil_op: Operator
             Compiler.compile(basis_reprs: list[BasisRep]) -> None
             Compiler.sdp_data() -> SDPData
             Compiler.summary() -> dict
-            Compiler.fourier(rep: BasisRep, block_idx: int) -> Operator
+            Compiler.local_comm(rep: BasisRep) -> list[tuple[BasisRep, int, complex]]
+            Compiler.nonzero_fourier(rep: BasisRep, block_idx: int) -> bool
     '''
     def __init__(
         self,
@@ -113,8 +112,6 @@ class NGARunner:
 
         self.psd_eigvals = []
         self.psd_eigvecs = []
-
-        self.leverage = None
 
         # small indices have higher priority
         self.to_drop = []
@@ -159,7 +156,7 @@ class NGARunner:
         if not self.psd_eigvals or not self.psd_eigvecs:
             raise ValueError('diagonalize psd blocks first')
 
-        self.leverage = np.zeros(len(self.basis_reprs))
+        leverage = np.zeros(len(self.basis_reprs))
         null_eigvals = []
 
         for block_reprs, eigvals, eigvecs in zip(
@@ -183,7 +180,7 @@ class NGARunner:
             null_eigvals.extend(eigvals[null_mask])
             for rep, score in zip(block_reprs, block_leverage):
                 idx = self.basis_indices[rep.canon]
-                self.leverage[idx] += float(score)
+                leverage[idx] += float(score)
 
         null_count = len(null_eigvals)
         if null_count == 0:
@@ -192,26 +189,34 @@ class NGARunner:
             self.record.max_drop_null_eigval = None
             return self.to_drop
 
-        self.leverage /= null_count
+        leverage /= null_count
         max_null_eigval = float(np.max(null_eigvals)) if null_eigvals else None
 
-        candidates = [
+        cands = [
             (score, rep.canon)
-            for rep, score in zip(self.basis_reprs, self.leverage)
+            for rep, score in zip(self.basis_reprs, leverage)
             if rep.canon not in self.required_keys
             and score < self.nga_params.max_drop_leverage
         ]
         # sorted by leverages in nullspace (ascending)
-        candidates.sort()
+        cands.sort()
         drop_cap = max(
             self.nga_params.drop_cap_base_per_step,
             math.ceil(self.nga_params.drop_cap_rate * len(self.basis_reprs)),
         )
-        self.to_drop = [key for _, key in candidates[:drop_cap]]
+        self.to_drop = [key for _, key in cands[:drop_cap]]
 
         self.record.drop_null_count = null_count
         self.record.max_drop_null_eigval = max_null_eigval
         return self.to_drop
+
+    @cache
+    def _local_comm(self, rep):
+        r'''
+            calculate C_a = [H, O_a(0)] = \sum_{b,s} C_{ab}(s) T_s O'(0)_b
+            as entry list [(O'(0)_b, s, C_{ab}(s)), ...]
+        '''
+        return self.compiler.local_comm(rep)
 
     def proposed_grow(self):
         if not self.psd_eigvals or not self.psd_eigvecs:
@@ -221,46 +226,76 @@ class NGARunner:
         target_growth = len(self.to_drop) + self.nga_params.max_net_growth_per_step
         self.to_grow = []
 
-        # sort nullspace eigvals across all blocks
-        null_dirs = []
-        for block_idx, eigvals in enumerate(self.psd_eigvals):
-            # momentum-block nullspace indices (ascending)
-            null_indices = np.flatnonzero((0 <= eigvals) & (eigvals <= self.nga_params.grow_null_tol))
-            for eig_idx in null_indices:
-                null_dirs.append((eigvals[eig_idx], block_idx, eig_idx))
-        null_dirs.sort()
-        null_count = len(null_dirs)
-        max_null_eigval = float(max((eigval for eigval, _, _ in null_dirs), default=0)) if null_dirs else None
-        self.record.grow_null_count = null_count
-        self.record.max_grow_null_eigval = max_null_eigval
+        cand_scores = {}
+        cand_reps = {}
+        null_eigvals = []
 
-        candidate_scores = {}
-        candidate_reps = {}
+        for n, (block_reprs, eigvals, eigvecs) in enumerate(zip(
+            self.compiler.block_reprs,
+            self.psd_eigvals,
+            self.psd_eigvecs,
+        )):
+            null_mask = (0 <= eigvals) & (eigvals <= self.nga_params.grow_null_tol)
+            if np.count_nonzero(null_mask) == 0:
+                continue
 
-        for _, block_idx, eig_idx in null_dirs:
-            # build the null operator
-            block_reprs = self.compiler.block_reprs[block_idx]
-            coeffs = self.psd_eigvecs[block_idx][:, eig_idx]
-            op = type(self.compiler.hamil_op)()
-            for coeff, rep in zip(coeffs, block_reprs):
-                if abs(coeff) < 1e-10:
-                    continue
-                op = op + coeff * self.compiler.fourier(rep, block_idx)
+            null_eigvals.extend(eigvals[null_mask])
+            null_eigvecs = eigvecs[:, null_mask]
+            k = 2 * np.pi * n / self.compiler.L
 
-            # descendants
-            desc = self.compiler.hamil_op.commutator(op)
-            for pstr, coeff in desc.terms.items():
-                key = pstr.canon
-                if key in basis_keys:
-                    continue
-                candidate_scores[key] = candidate_scores.get(key, 0) + float(abs(coeff))
-                candidate_reps[key] = pstr.canon_rep
+            r'''
+                W_{b,\alpha}(k) = \sum_{s,a} [v_{k,\alpha}]_a C_{ab}(s) e^{iks}
 
-        candidates = sorted(
-            candidate_scores,
-            key=lambda key: (-candidate_scores[key], key),
-        )
-        self.to_grow = [candidate_reps[key] for key in candidates[:target_growth]]
+                D_{ba}(k) = \sum_s C_{ab}(s) e^{iks}
+
+                s.t. W(k) = \sum_a D_{ba}(k) [v(k)]_{a,\alpha} = D(k) @ v(k)
+                and define Score(b) = \sum_{k,\alpha} |W_{b,\alpha}(k)|^2.
+            '''
+            desc_rows = {}
+            desc_keys = []
+            rows = []
+            cols = []
+            data = []
+
+            # sparse descendant matrix D_{ba}(k) = \sum_s C_{ab}(s) e^{iks}
+            for a_idx, rep in enumerate(block_reprs):
+                for desc_rep, s, coeff in self._local_comm(rep):
+                    desc_key = desc_rep.canon
+                    if desc_key in basis_keys:
+                        continue
+                    if not self.compiler.nonzero_fourier(desc_rep, n):
+                        continue
+
+                    row = desc_rows.get(desc_key)
+                    if row is None:
+                        row = len(desc_keys)
+                        desc_rows[desc_key] = row
+                        desc_keys.append(desc_key)
+                        if desc_key not in cand_reps:
+                            cand_reps[desc_key] = desc_rep
+
+                    rows.append(row)
+                    cols.append(a_idx)
+                    data.append(coeff * np.exp(1j * k * s))
+
+            if not data:
+                continue
+
+            D = sp.sparse.coo_matrix(
+                (data, (rows, cols)),
+                shape=(len(desc_keys), len(block_reprs)),
+            ).tocsr() # implicitly sum over s
+            w = D @ null_eigvecs
+            block_scores = np.sum(np.abs(w)**2, axis=1)
+
+            for desc_key, score in zip(desc_keys, block_scores):
+                cand_scores[desc_key] = cand_scores.get(desc_key, 0) + float(score)
+
+        self.record.grow_null_count = len(null_eigvals)
+        self.record.max_grow_null_eigval = float(np.max(null_eigvals)) if null_eigvals else None
+
+        cands = sorted(cand_scores, key=lambda key: (-cand_scores[key], key))
+        self.to_grow = [cand_reps[key] for key in cands[:target_growth]]
         return self.to_grow
 
     def update(self):

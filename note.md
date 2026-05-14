@@ -368,3 +368,64 @@ flowchart LR
 ```
 
 Its physical interpretation is that the primal near-nullspace proposes approximate ground-state annihilators, while Hamiltonian descendants test whether those annihilators close under the dynamics (if so, they are more likely to be physical).
+
+#### *3.1. Local commutator cache*
+The naive growth procedure is expensive because each near-null PSD direction constructs a Fourier-expanded null operator and then calculates the commutator. For one momentum sector, write schematically
+$$
+    \mathcal{O}_a(k) = \frac{1}{\sqrt{L}} \sum_r e^{-ikr} \mathcal{O}_a(r).
+$$
+A near-null operator is
+$$
+    \mathcal{P}_\alpha(k) = \sum_a (v_{k\alpha})_a \mathcal{O}_a(k)
+    = \frac{1}{\sqrt{L}} \sum_{a,r} (v_{k\alpha})_a e^{-ikr} \mathcal{O}_a(r).
+$$
+The Hubbard Hamiltonian is a sum of translated local terms,
+$$
+    H = \sum_{r'} h(r').
+$$
+The direct commutator is therefore
+$$
+    [H, \mathcal{P}_\alpha(k)]
+    = \frac{1}{\sqrt{L}} \sum_{r,r',a} (v_{k\alpha})_a e^{-ikr} \left[h(r'), \mathcal{O}_a(r)\right].
+$$
+For a block with $B_k$ basis representatives, one null vector contains $O(B_k L)$ translated monomial terms, while $H$ contains $O(L)$ local terms. The current symbolic cost is roughly $O(B_k L^2)$ per $(k,\alpha)$, so if sector $k$ has $D_k$ null vectors, the cost of growth scales as
+$$
+    \sum_k O\left(D_k B_k L^2\right).
+$$
+For typical $D_k \sim D$, $B_k \sim B$, and $O(L)$ momentum sectors, this is $O\left(D B L^3\right)$.
+
+To optimize the growth procedure, use translation invariance before applying null-vector coefficients.
+$$
+    \sum_{r'} \left[h(r'), \mathcal{O}_a(r)\right]
+    = \sum_\delta \left[h(r+\delta), \mathcal{O}_a(r)\right]
+    = \sum_\delta \mathcal{T}_r \left[h(\delta), \mathcal{O}_a(0)\right]
+    \overset{!}{=} \mathcal{T}_r \mathcal{C}_a.
+$$
+
+Cache the relative local commutators
+$$
+    \mathcal{C}_a = \sum_\delta \left[h(\delta), \mathcal{O}_a(0)\right]
+    = \left[H, \mathcal{O}_a(0)\right]
+    = \sum_{s,b} C_{ab}(s) \mathcal{T}_s \mathcal{O}'_b.
+$$
+$\mathcal{O}'_b$ are translational representatives with $\{\mathcal{T}_s\mathcal{O}'_b\}$ spanning the new basis space including incoming descendants. $C_{ab}(s)$ is stored as a sparse map. This step takes naively $O(BL)$ number of monomial multiplications and $O(B)$ considering the locality of $H$ and $\mathcal{O}_a$.
+$$
+\begin{aligned}
+    \mathcal{C}_\alpha(k) &\overset{!}{=} [H, \mathcal{P}_\alpha(k)]
+    = \frac{1}{\sqrt{L}} \sum_{r,a} (v_{k\alpha})_a e^{-ikr} \mathcal{T}_r \mathcal{C}_a\\[5pt]
+    &= \frac{1}{\sqrt{L}} \sum_{r,s,a,b} (v_{k\alpha})_a e^{-ikr} C_{ab}(s) \mathcal{T}_{r+s} \mathcal{O}'_b\\[5pt]
+    &= \sum_b \underbrace{\left(\sum_{s,a} (v_{k\alpha})_a C_{ab}(s) e^{iks}\right)}_{[W_\alpha(k)]_b} \underbrace{\left(\frac{1}{\sqrt{L}} \sum_{r} e^{-ikr} \mathcal{T}_{r} \mathcal{O}'_b\right)}_{\mathcal{O}'_b(k)}.
+\end{aligned}
+$$
+The score of certain descendant candidate $\mathcal{O}'_b$ is defined as
+$$
+    \sum_{k\alpha} \left\lvert[W_\alpha(k)]_b\right\rvert^2.
+$$
+For each momentum block $k$, $W(k)_{\alpha,b}$ are computed as a sparse-dense multiplication
+$$
+    W(k)_{\alpha,b} = \sum_{s,a} v_{\alpha,a}(k) C_{ab}(s) e^{iks}
+$$
+with cost $O[D_k\ \mathrm{nnz}(C)]$ per momentum block and $\mathrm{nnz}(C)=\left\lvert\{(a,b,s): C_{ab}(s)\neq 0\}\right\rvert$. In the ideal case, each commutator between hamiltonian and the local basis generates $O(1)$ local descendant terms, then $\mathrm{nnz}(C)\sim O(B)$ and hence evaluating $W(k)$ costs $O(D_k B)$ for each $k$ and roughly $O(DBL)$ for all $k$. Computing scores takes additional efforts proportional to $O(DBL)$. Therefore the total complexity is reduced from $O(D B L^3)$ to
+$$
+    O(DBL).
+$$

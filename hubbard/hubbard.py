@@ -479,6 +479,12 @@ class HubbardCompiler:
                             self.ward_index[key] = len(self.ward_moments)
                             self.ward_moments.append(MajoranaMonomial(L=self.L, mask=key))
 
+    @staticmethod
+    def nonzero_fourier(monomial: MajoranaMonomial, n: int) -> bool:
+        if monomial.period_sign == 1:
+            return (n * monomial.period) % monomial.L == 0
+        return (2 * n * monomial.period) % (2 * monomial.L) == monomial.L
+
     def _build_block_reprs(self):
         '''
             for a Majorana monomial with period L_a < L,
@@ -486,15 +492,10 @@ class HubbardCompiler:
         '''
         self.block_reprs = []
         for n in range(self.L//2 + 1):
-            reprs = []
-            for monomial in self.basis_reprs:
-                if monomial.period_sign == 1:
-                    compatible = (n * monomial.period) % self.L == 0
-                else:
-                    compatible = (2 * n * monomial.period) % (2 * self.L) == self.L
-                if compatible:
-                    reprs.append(monomial)
-            self.block_reprs.append(reprs)
+            self.block_reprs.append([
+                monomial for monomial in self.basis_reprs
+                if self.nonzero_fourier(monomial, n)
+            ])
 
     def _build_psd(self):
         '''
@@ -607,24 +608,42 @@ class HubbardCompiler:
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ build affine constraints
         self._build_affines()
 
-    def fourier(self, monomial: MajoranaMonomial, n: int):
-        if monomial.period_sign == 1:
-            compatible = (n * monomial.period) % self.L == 0
-        else:
-            compatible = (2 * n * monomial.period) % (2 * self.L) == self.L
-        if not compatible:
-            raise ValueError('momentum incompatible with Majorana monomial period')
+    def local_comm(self, monomial: MajoranaMonomial):
+        r'''
+            calculate
 
-        k = 2*np.pi * n / self.L
-        op = MajoranaOperator()
-        norm = np.sqrt(monomial.period)
-        for shift in range(monomial.period):
-            mask, sign = monomial._rotate_l(monomial.mask, shift, return_sign=True)
-            op.add(
-                MajoranaMonomial(L=self.L, mask=mask),
-                sign * np.exp(-1j * k * shift) / norm,
-            )
-        return op
+                C_a = [H, O_a(0)] = \sum_{b,s} C_{ab}(s) T_s O'(0)_b
+
+            as entry list [(O'(0)_b, s, C_{ab}(s)), ...]
+
+            [NOT IMPLEMENTED]
+            Locality pruning would require computing [h(r), O_a(0)] term by term.
+            If two Majorana monomials A and B have disjoint support, then
+            BA = (-1)^{deg(A) deg(B)} AB. Hubbard Hamiltonian terms are even,
+            and bootstrap basis representatives are normally fermion-even, so
+            disjoint terms commute and can be skipped.
+        '''
+        entries = {}
+        local_comm = self.hamil_op.commutator(MajoranaOperator({monomial: 1}))
+
+        for desc, coeff in local_comm.terms.items():
+            desc_rep = desc.canon_rep
+            s, s_sign = 0, 1
+            for shift in range(desc.L):
+                mask, sign = desc_rep._rotate_l(desc_rep.mask, shift, return_sign=True)
+                if mask == desc.mask:
+                    s, s_sign = shift, sign
+                    break
+
+            key = (desc_rep.canon, s)
+            entries[key] = entries.get(key, 0) + coeff * s_sign
+            if entries[key] == 0:
+                del entries[key]
+
+        return [
+            (MajoranaMonomial(L=monomial.L, mask=desc_canon), s, coeff)
+            for (desc_canon, s), coeff in entries.items()
+        ]
 
     def _get_expr_str(self, expr: LinearExpr) -> str:
         parts = [
