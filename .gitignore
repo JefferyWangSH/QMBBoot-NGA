@@ -3,5 +3,5 @@
 CLAUDE.md
 AGENTS.md
 *.json
-!config.json
+!config*.json
 workspace

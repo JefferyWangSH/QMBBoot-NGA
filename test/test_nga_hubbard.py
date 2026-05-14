@@ -1,10 +1,10 @@
 from nga import NGAParams, NGARunner
-from hubbard.hubbard import HubbardCompiler, HubbardParams, MajoranaMonomial, load_basis_reprs
+from hubbard.hubbard import HubbardCompiler, HubbardParams, MajoranaMonomial, build_basis_reprs
 
 if __name__ == '__main__':
 
     params = HubbardParams(L=10, t=1., U=4., n_particles=10)
-    basis_reprs = load_basis_reprs(
+    basis_reprs = build_basis_reprs(
         params.L,
         max_degree=4,
         max_support=1,

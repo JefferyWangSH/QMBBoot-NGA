@@ -1,9 +1,26 @@
 {
+  "model_type": "hubbard",
   "model": {
     "L": 10,
     "t": 1.0,
     "U": 4.0,
     "n_particles": 10
+  },
+  "basis": {
+    "initial": {
+      "max_degree": 4,
+      "max_support": 1,
+      "max_diameter": 0
+    },
+    "required": [
+      "I",
+      "0u+",
+      "0u-",
+      "0d+",
+      "0d-",
+      "0u+ 0u-",
+      "0d+ 0d-"
+    ]
   },
   "nga": {
     "solver_backend": "SCS",
@@ -18,10 +35,5 @@
     "max_net_growth_per_step": 8,
     "drop_cap_base_per_step": 8,
     "drop_cap_rate": 0.15
-  },
-  "initial_basis": {
-    "max_degree": 4,
-    "max_support": 1,
-    "max_diameter": 0
   }
 }

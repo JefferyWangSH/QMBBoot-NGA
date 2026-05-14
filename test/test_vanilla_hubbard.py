@@ -1,10 +1,10 @@
-from hubbard.hubbard import HubbardCompiler, HubbardParams, load_basis_reprs
+from hubbard.hubbard import HubbardCompiler, HubbardParams, build_basis_reprs
 from sdp import SDPSolver
 
 if __name__ == '__main__':
     params = HubbardParams(L=16, t=1., U=4., n_particles=16)
     compiler = HubbardCompiler(params=params)
-    compiler.compile(basis_reprs=load_basis_reprs(
+    compiler.compile(basis_reprs=build_basis_reprs(
         params.L,
         max_degree=4,
         max_support=1,

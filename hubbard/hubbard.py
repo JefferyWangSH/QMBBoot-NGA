@@ -686,7 +686,7 @@ class HubbardCompiler:
         2) max_support restricts the max number of lattice sites involved;
         3) max_diameter restricts the max distance of any two majorana operators.
 '''
-def load_basis_reprs(L: int, max_degree: int, max_support: int, max_diameter: int):
+def build_basis_reprs(L: int, max_degree: int, max_support: int, max_diameter: int):
     if max_degree < 0 or max_degree > 4 * L:
         raise ValueError('max_degree must be between 0 and 4L')
     if max_support < 0 or max_support > L:
@@ -766,7 +766,7 @@ if __name__ == '__main__':
     print(compiler.hamil_op)
 
     # local basis: all majorana monomials supported on one site
-    compiler.compile(basis_reprs=load_basis_reprs(
+    compiler.compile(basis_reprs=build_basis_reprs(
         params.L,
         max_degree=4,
         max_support=1,
