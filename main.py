@@ -73,15 +73,13 @@ class ModelAdapter:
     def get_basis_rep(self, key):
         if self.model_type == 'hubbard':
             return MajoranaMonomial(self.model_params.L, key).canon_rep
-        x_mask = key >> self.model_params.L
-        z_mask = key & ((1 << self.model_params.L) - 1)
-        return PauliString._from_masks(self.model_params.L, x_mask, z_mask).canon_rep
+        return PauliString(self.model_params.L, key).canon_rep
 
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=Path, default=Path('config.json'))
+    parser.add_argument('--config', type=Path, default=Path('config-hubbard.json'))
     parser.add_argument('--output-dir', type=Path, default=Path('.'))
     parser.add_argument('--resume', type=Path, default=None)
     parser.add_argument('--steps', type=int, default=16)

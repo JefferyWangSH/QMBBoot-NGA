@@ -11,103 +11,84 @@ from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
 '''
 
 class PauliString:
-    L: int      # bit length
-    x_mask: int # bit representation of x operators
-    z_mask: int # bit representation of z operators
+    L: int
+    mask: int # 2L-bit, each site uses I=00, X=01, Z=10, Y=11
 
     # canonical representation, unique as the translation-invariant representative
     canon: int
     canon_rep: 'PauliString'
     period: int
 
-    def __init__(self, pstr: str):
-        self.L = len(pstr)
-        self.x_mask = 0
-        self.z_mask = 0
-        for i, pauli in enumerate(pstr):
-            if pauli in 'XY':
-                self.x_mask |= 1 << i
-            if pauli in 'ZY':
-                self.z_mask |= 1 << i
+    def __init__(self, L: int, mask: int = 0):
+        if L <= 0:
+            raise ValueError('L must be positive')
+        if mask < 0:
+            raise ValueError('mask must be non-negative')
+        full = (1 << (2*L)) - 1
+        if mask & ~full:
+            raise ValueError('mask exceeds the available 2L Pauli bits')
+        self.L = L
+        self.mask = mask
 
     @classmethod
-    def _from_masks(cls, L: int, x_mask: int, z_mask: int):
-        pstr = cls.__new__(cls)
-        pstr.L = L
-        pstr.x_mask = x_mask
-        pstr.z_mask = z_mask
-        return pstr
-    
+    def from_str(cls, pstr: str):
+        mask = 0
+        for i, pauli in enumerate(pstr):
+            if pauli == 'I':
+                code = 0
+            elif pauli == 'X':
+                code = 1
+            elif pauli == 'Z':
+                code = 2
+            elif pauli == 'Y':
+                code = 3
+            else:
+                raise ValueError(f'invalid Pauli operator: {pauli}')
+            mask |= code << (2*i)
+        return cls(L=len(pstr), mask=mask)
+
     def _rotate_l(self, mask: int, shift: int) -> int:
         shift %= self.L
         if shift == 0:
             return mask
-        full = (1 << self.L) - 1
-        return ((mask << shift) | (mask >> (self.L - shift))) & full
-
-    def _pack(self, x_mask: int, z_mask: int) -> int:
-        return (x_mask << self.L) | z_mask
+        full = (1 << (2*self.L)) - 1
+        rot = 2*shift
+        return ((mask << rot) | (mask >> (2*self.L - rot))) & full
 
     @cached_property
     def canon(self) -> int:
-        canon = self._pack(self.x_mask, self.z_mask)
+        canon = self.mask
         for shift in range(1, self.L):
-            x_rot = self._rotate_l(self.x_mask, shift)
-            z_rot = self._rotate_l(self.z_mask, shift)
-            cand = self._pack(x_rot, z_rot)
+            cand = self._rotate_l(self.mask, shift)
             if cand < canon:
                 canon = cand
         return canon
 
     @cached_property
     def canon_rep(self):
-        key = self.canon
-        for shift in range(self.L):
-            pstr = self.translate(shift)
-            if self._pack(pstr.x_mask, pstr.z_mask) == key:
-                return pstr
-        return self
+        return PauliString(self.L, self.canon)
 
     @cached_property
     def period(self) -> int:
         for shift in range(1, self.L):
-            if (
-                self._rotate_l(self.x_mask, shift) == self.x_mask and
-                self._rotate_l(self.z_mask, shift) == self.z_mask
-            ):
+            if self._rotate_l(self.mask, shift) == self.mask:
                 return shift
         return self.L
 
     def translate(self, shift: int):
-        pstr = PauliString.__new__(PauliString)
-        pstr.L = self.L
-        pstr.x_mask = self._rotate_l(self.x_mask, shift)
-        pstr.z_mask = self._rotate_l(self.z_mask, shift)
-        return pstr
+        return PauliString(self.L, self._rotate_l(self.mask, shift))
 
     def __eq__(self, other):
-        return (
-            self.L == other.L and
-            self.x_mask == other.x_mask and
-            self.z_mask == other.z_mask
-        )
+        return self.L == other.L and self.mask == other.mask
 
     def __hash__(self):
-        return hash((self.L, self.x_mask, self.z_mask))
+        return hash((self.L, self.mask))
 
     def __str__(self):
         chars = []
+        paulis = 'IXZY'
         for i in range(self.L):
-            x = (self.x_mask >> i) & 1
-            z = (self.z_mask >> i) & 1
-            if x == 0 and z == 0:
-                chars.append('I')
-            elif x == 1 and z == 0:
-                chars.append('X')
-            elif x == 0 and z == 1:
-                chars.append('Z')
-            else:
-                chars.append('Y')
+            chars.append(paulis[(self.mask >> (2*i)) & 3])
         return ''.join(chars)
 
     def dag(self):
@@ -115,16 +96,16 @@ class PauliString:
 
     def mul(self, other) -> tuple["PauliString", float|complex]:
         assert self.L == other.L
-        x_mask = self.x_mask ^ other.x_mask
-        z_mask = self.z_mask ^ other.z_mask
+        mask = self.mask ^ other.mask
 
         phase = 1.
-        support = self.x_mask | self.z_mask | other.x_mask | other.z_mask
+        support = self.mask | other.mask
 
         while support:
             bit = support & -support
-            a = ((self.x_mask & bit) != 0) + 2 * ((self.z_mask & bit) != 0)
-            b = ((other.x_mask & bit) != 0) + 2 * ((other.z_mask & bit) != 0)
+            site = (bit.bit_length() - 1) // 2
+            a = (self.mask >> (2*site)) & 3
+            b = (other.mask >> (2*site)) & 3
 
             if a == 1 and b == 2:   # XZ = -iY
                 phase *= -1j
@@ -139,13 +120,17 @@ class PauliString:
             elif a == 3 and b == 2: # YZ = iX
                 phase *= 1j
 
-            support ^= bit
+            support &= ~(3 << (2*site))
 
-        return PauliString._from_masks(self.L, x_mask, z_mask), phase
+        return PauliString(self.L, mask), phase
 
     def parity(self):
         # +1 for K even and -1 for K odd
-        return 1 - 2 * int((self.x_mask & self.z_mask).bit_count() % 2)
+        y_count = sum(
+            1 for i in range(self.L)
+            if ((self.mask >> (2*i)) & 3) == 3
+        )
+        return 1 - 2 * int(y_count % 2)
 
 
 class IsingOperator:
@@ -241,8 +226,8 @@ class IsingParams:
 
 def build_hamil(params: IsingParams):
     assert params.L >= 2
-    x = PauliString('X'+'I'*(params.L-1))
-    zz = PauliString('ZZ'+'I'*(params.L-2))
+    x = PauliString.from_str('X'+'I'*(params.L-1))
+    zz = PauliString.from_str('ZZ'+'I'*(params.L-2))
     hamil_op = IsingOperator()
     for shift in range(params.L):
         hamil_op.add(zz.translate(shift), -params.J / params.L)
@@ -396,7 +381,7 @@ class IsingCompiler:
         self.affines = AffineConstraints(n_vars=len(self.vars))
 
         # normalization constraint, <I> == 1
-        id_key = PauliString('I'*self.L).canon
+        id_key = PauliString.from_str('I'*self.L).canon
         if id_key not in self.var_index:
             raise ValueError('current basis cannot represent the identity operator')
         self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
@@ -508,15 +493,15 @@ def build_basis_reprs(L: int, basis: list[str]) -> list[PauliString]:
     for pstr in basis:
         if len(pstr) > L:
             raise ValueError('Pauli string length exceeds system size L')
-        basis_reprs.append(PauliString(pstr + 'I'*(L - len(pstr))))
+        basis_reprs.append(PauliString.from_str(pstr + 'I'*(L - len(pstr))))
     return basis_reprs
 
 
 if __name__ == '__main__':
 
     # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-    pstr1 = PauliString(pstr='IXYZZZII')
-    pstr2 = PauliString(pstr='ZZZIIIXY')
+    pstr1 = PauliString.from_str(pstr='IXYZZZII')
+    pstr2 = PauliString.from_str(pstr='ZZZIIIXY')
     print(pstr1.canon, pstr2.canon)
 
     print(pstr1)
