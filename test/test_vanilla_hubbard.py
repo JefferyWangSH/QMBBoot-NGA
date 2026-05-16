@@ -1,4 +1,4 @@
-from hubbard.hubbard import HubbardCompiler, HubbardParams, build_basis_reprs
+from compiler.hubbard import HubbardCompiler, HubbardParams, build_basis_reprs
 from sdp import SDPSolver
 
 if __name__ == '__main__':

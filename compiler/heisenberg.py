@@ -1,9 +1,7 @@
 from dataclasses import dataclass
 
-from ising.ising import (
-    PauliString, IsingOperator, IsingCompiler,
-    build_basis_reprs as _build_basis_reprs,
-)
+from compiler.ising import IsingCompiler, build_basis_reprs as _build_basis_reprs
+from operators.pauli import PauliString, PauliOperator
 
 build_basis_reprs = _build_basis_reprs
 
@@ -21,7 +19,7 @@ def _two_site_op(L: int, pauli: str, dist: int):
 
 def build_hamil(params: HeisenbergParams):
     assert params.L >= 3
-    hamil_op = IsingOperator()
+    hamil_op = PauliOperator()
 
     for pauli in 'XYZ':
         nn = _two_site_op(params.L, pauli, 1)

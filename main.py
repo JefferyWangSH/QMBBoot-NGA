@@ -27,10 +27,8 @@ class ModelAdapter:
         nga_params = NGAParams(**data['nga'])
 
         if model_type == 'hubbard':
-            from hubbard.hubbard import (
-                HubbardCompiler, HubbardParams, MajoranaMonomial,
-                build_basis_reprs,
-            )
+            from compiler.hubbard import HubbardCompiler, HubbardParams, build_basis_reprs
+            from operators.majorana import MajoranaMonomial
             model_params = HubbardParams(**model_config)
             compiler = HubbardCompiler(model_params)
             parse_basis = lambda strings: [MajoranaMonomial.from_str(model_params.L, s).canon_rep for s in strings]
@@ -38,10 +36,7 @@ class ModelAdapter:
             required_basis = parse_basis(basis_config['required'])
 
         elif model_type == 'ising':
-            from ising.ising import (
-                IsingCompiler, IsingParams,
-                build_basis_reprs,
-            )
+            from compiler.ising import IsingCompiler, IsingParams, build_basis_reprs
             model_params = IsingParams(**model_config)
             compiler = IsingCompiler(model_params)
             parse_basis = lambda strings: build_basis_reprs(model_params.L, strings)
@@ -49,10 +44,7 @@ class ModelAdapter:
             required_basis = parse_basis(basis_config['required'])
 
         elif model_type == 'heisenberg':
-            from heisenberg.heisenberg import (
-                HeisenbergCompiler, HeisenbergParams,
-                build_basis_reprs,
-            )
+            from compiler.heisenberg import HeisenbergCompiler, HeisenbergParams, build_basis_reprs
             model_params = HeisenbergParams(**model_config)
             compiler = HeisenbergCompiler(model_params)
             parse_basis = lambda strings: build_basis_reprs(model_params.L, strings)
@@ -90,7 +82,7 @@ class ModelAdapter:
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=Path, default=Path('config-hubbard.json'))
+    parser.add_argument('--config', type=Path, default=Path('config/hubbard.json'))
     parser.add_argument('--output-dir', type=Path, default=Path('.'))
     parser.add_argument('--resume', type=Path, default=None)
     parser.add_argument('--steps', type=int, default=16)

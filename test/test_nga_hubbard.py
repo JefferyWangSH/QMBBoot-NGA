@@ -1,5 +1,6 @@
 from nga import NGAParams, NGARunner
-from hubbard.hubbard import HubbardCompiler, HubbardParams, MajoranaMonomial, build_basis_reprs
+from compiler.hubbard import HubbardCompiler, HubbardParams, build_basis_reprs
+from operators.majorana import MajoranaMonomial
 
 if __name__ == '__main__':
 

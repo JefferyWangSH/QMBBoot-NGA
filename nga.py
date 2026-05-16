@@ -330,7 +330,7 @@ class NGARunner:
 
 if __name__ == '__main__':
 
-    from ising.ising import IsingCompiler, IsingParams, build_basis_reprs
+    from compiler.ising import IsingCompiler, IsingParams, build_basis_reprs
 
     params = IsingParams(L=16, J=1., h=1.)
     basis_reprs = build_basis_reprs(params.L, ['I', 'X', 'ZZ'])

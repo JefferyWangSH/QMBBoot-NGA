@@ -1,221 +1,14 @@
 from dataclasses import dataclass
-from functools import cached_property
 import numpy as np
 import scipy as sp
 
+from operators.pauli import PauliString, PauliOperator
 from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
 
 
 '''
     length-L transverse Ising chain (PBC)
 '''
-
-class PauliString:
-    L: int
-    mask: int # 2L-bit, each site uses I=00, X=01, Z=10, Y=11
-
-    # canonical representation, unique as the translation-invariant representative
-    canon: int
-    canon_rep: 'PauliString'
-    period: int
-
-    def __init__(self, L: int, mask: int = 0):
-        if L <= 0:
-            raise ValueError('L must be positive')
-        if mask < 0:
-            raise ValueError('mask must be non-negative')
-        full = (1 << (2*L)) - 1
-        if mask & ~full:
-            raise ValueError('mask exceeds the available 2L Pauli bits')
-        self.L = L
-        self.mask = mask
-
-    @classmethod
-    def from_str(cls, pstr: str):
-        mask = 0
-        for i, pauli in enumerate(pstr):
-            if pauli == 'I':
-                code = 0
-            elif pauli == 'X':
-                code = 1
-            elif pauli == 'Z':
-                code = 2
-            elif pauli == 'Y':
-                code = 3
-            else:
-                raise ValueError(f'invalid Pauli operator: {pauli}')
-            mask |= code << (2*i)
-        return cls(L=len(pstr), mask=mask)
-
-    def _rotate_l(self, mask: int, shift: int) -> int:
-        shift %= self.L
-        if shift == 0:
-            return mask
-        full = (1 << (2*self.L)) - 1
-        rot = 2*shift
-        return ((mask << rot) | (mask >> (2*self.L - rot))) & full
-
-    @cached_property
-    def canon(self) -> int:
-        canon = self.mask
-        for shift in range(1, self.L):
-            cand = self._rotate_l(self.mask, shift)
-            if cand < canon:
-                canon = cand
-        return canon
-
-    @cached_property
-    def canon_rep(self):
-        return PauliString(self.L, self.canon)
-
-    @cached_property
-    def period(self) -> int:
-        for shift in range(1, self.L):
-            if self._rotate_l(self.mask, shift) == self.mask:
-                return shift
-        return self.L
-
-    def translate(self, shift: int):
-        return PauliString(self.L, self._rotate_l(self.mask, shift))
-
-    def __eq__(self, other):
-        return self.L == other.L and self.mask == other.mask
-
-    def __hash__(self):
-        return hash((self.L, self.mask))
-
-    def __str__(self):
-        chars = []
-        paulis = 'IXZY'
-        for i in range(self.L):
-            chars.append(paulis[(self.mask >> (2*i)) & 3])
-        return ''.join(chars)
-
-    def dag(self):
-        return self
-
-    def mul(self, other) -> tuple["PauliString", float|complex]:
-        assert self.L == other.L
-        mask = self.mask ^ other.mask
-
-        phase = 1.
-        support = self.mask | other.mask
-
-        while support:
-            bit = support & -support
-            site = (bit.bit_length() - 1) // 2
-            a = (self.mask >> (2*site)) & 3
-            b = (other.mask >> (2*site)) & 3
-
-            if a == 1 and b == 2:   # XZ = -iY
-                phase *= -1j
-            elif a == 2 and b == 1: # ZX = iY
-                phase *= 1j
-            elif a == 1 and b == 3: # XY = iZ
-                phase *= 1j
-            elif a == 3 and b == 1: # YX = -iZ
-                phase *= -1j
-            elif a == 2 and b == 3: # ZY = -iX
-                phase *= -1j
-            elif a == 3 and b == 2: # YZ = iX
-                phase *= 1j
-
-            support &= ~(3 << (2*site))
-
-        return PauliString(self.L, mask), phase
-
-    def parity(self):
-        # +1 for K even and -1 for K odd
-        y_count = sum(
-            1 for i in range(self.L)
-            if ((self.mask >> (2*i)) & 3) == 3
-        )
-        return 1 - 2 * int(y_count % 2)
-
-
-class IsingOperator:
-    L: int | None
-    terms: dict[PauliString, float|complex]
-
-    def __init__(self, terms=None):
-        self.L = None # L is None only for zero operator
-        self.terms = {}
-        if terms is None:
-            return
-        for pstr, coeff in terms.items():
-            self.add(pstr, coeff)
-
-    def __str__(self):
-        if not self.terms:
-            return '0'
-        return ' + '.join([
-            f'{coeff}*{str(pstr)}' for pstr, coeff in self.terms.items()
-        ])
-
-    def copy(self):
-        op = IsingOperator()
-        op.L = self.L
-        op.terms = self.terms.copy()
-        return op
-
-    def add(self, pstr: PauliString, coeff: float|complex):
-        if coeff == 0:
-            return
-        if self.L is None:
-            self.L = pstr.L
-        elif pstr.L != self.L:
-            raise ValueError('Pauli strings in an operator must have the same L')
-        self.terms[pstr] = self.terms.get(pstr, 0) + coeff
-        if self.terms[pstr] == 0:
-            del self.terms[pstr]
-        if not self.terms:
-            self.L = None
-
-    def __add__(self, other):
-        assert self.L is None or other.L is None or self.L == other.L
-        op = self.copy()
-        for pstr, coeff in other.terms.items():
-            op.add(pstr, coeff)
-        return op
-
-    def __sub__(self, other):
-        assert self.L is None or other.L is None or self.L == other.L
-        op = self.copy()
-        for pstr, coeff in other.terms.items():
-            op.add(pstr, -coeff)
-        return op
-
-    def __neg__(self):
-        op = IsingOperator()
-        for pstr, coeff in self.terms.items():
-            op.add(pstr, -coeff)
-        return op
-
-    def __rmul__(self, scalar):
-        op = IsingOperator()
-        for pstr, coeff in self.terms.items():
-            op.add(pstr, scalar * coeff)
-        return op
-
-    def mul(self, other):
-        assert self.L is None or other.L is None or self.L == other.L
-        op = IsingOperator()
-        for pstr1, coeff1 in self.terms.items():
-            for pstr2, coeff2 in other.terms.items():
-                pstr, phase = pstr1.mul(pstr2)
-                coeff = coeff1 * coeff2 * phase
-                op.add(pstr, coeff)
-        return op
-
-    def dag(self):
-        op = IsingOperator()
-        for pstr, coeff in self.terms.items():
-            op.add(pstr.dag(), coeff.conjugate())
-        return op
-
-    def commutator(self, other):
-        return self.mul(other) - other.mul(self)
-
 
 @dataclass(slots=True)
 class IsingParams:
@@ -229,7 +22,7 @@ def build_hamil(params: IsingParams):
     assert params.L >= 2
     x = PauliString.from_str('X'+'I'*(params.L-1))
     zz = PauliString.from_str('ZZ'+'I'*(params.L-2))
-    hamil_op = IsingOperator()
+    hamil_op = PauliOperator()
     for shift in range(params.L):
         hamil_op.add(zz.translate(shift), -params.J / params.L)
         hamil_op.add(x.translate(shift), -params.h / params.L)
@@ -290,7 +83,7 @@ class IsingCompiler:
     affines: AffineConstraints
     affines_mat: sp.sparse.csr_matrix
 
-    hamil_op: IsingOperator # full hamiltonian operator for computations of stationarity constraints
+    hamil_op: PauliOperator # full hamiltonian operator for computations of stationarity constraints
     hamil_expr: LinearExpr  # compiled hamiltonian expression
 
     def __init__(self, params: IsingParams):
@@ -394,7 +187,7 @@ class IsingCompiler:
         self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
 
         for pstr in self.ward_moments:
-            comm_op = self.hamil_op.commutator(IsingOperator({pstr: 1}))
+            comm_op = self.hamil_op.commutator(PauliOperator({pstr: 1}))
             expr = self._compile_expr(comm_op)
             if expr is None:
                 continue
@@ -402,7 +195,7 @@ class IsingCompiler:
 
         self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-10)
 
-    def _compile_expr(self, op: IsingOperator) -> LinearExpr | None:
+    def _compile_expr(self, op: PauliOperator) -> LinearExpr | None:
         expr = {}
         for pstr, coeff in op.terms.items():
             key = pstr.canon
@@ -442,7 +235,7 @@ class IsingCompiler:
             as entry list [(O'(0)_b, s, C_{ab}(s)), ...]
         '''
         entries = {}
-        local_comm = self.hamil_op.commutator(IsingOperator({pstr: 1}))
+        local_comm = self.hamil_op.commutator(PauliOperator({pstr: 1}))
 
         for desc, coeff in local_comm.terms.items():
             desc_rep = desc.canon_rep
@@ -515,8 +308,8 @@ if __name__ == '__main__':
     print(pstr2)
     print(*pstr1.mul(pstr2))
 
-    op1 = IsingOperator({pstr1: 1., pstr2: 1.j})
-    op2 = IsingOperator({pstr1: 1., pstr2: 1.j})
+    op1 = PauliOperator({pstr1: 1., pstr2: 1.j})
+    op2 = PauliOperator({pstr1: 1., pstr2: 1.j})
     print(op1)
     print(op2)
     print(op1.mul(op2))
