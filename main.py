@@ -4,14 +4,6 @@ import json
 from pathlib import Path
 import time
 
-from ising.ising import (
-    IsingCompiler, IsingParams, PauliString,
-    build_basis_reprs as build_ising_basis
-)
-from hubbard.hubbard import (
-    HubbardCompiler, HubbardParams, MajoranaMonomial,
-    build_basis_reprs as build_hubbard_basis
-)
 from nga import NGAParams, NGARunner
 
 @dataclass
@@ -35,17 +27,38 @@ class ModelAdapter:
         nga_params = NGAParams(**data['nga'])
 
         if model_type == 'hubbard':
+            from hubbard.hubbard import (
+                HubbardCompiler, HubbardParams, MajoranaMonomial,
+                build_basis_reprs,
+            )
             model_params = HubbardParams(**model_config)
             compiler = HubbardCompiler(model_params)
             parse_basis = lambda strings: [MajoranaMonomial.from_str(model_params.L, s).canon_rep for s in strings]
-            initial_basis = lambda initial: build_hubbard_basis(model_params.L, **initial)
+            initial_basis = lambda initial: parse_basis(initial) if isinstance(initial, list) else build_basis_reprs(model_params.L, **initial)
             required_basis = parse_basis(basis_config['required'])
+
         elif model_type == 'ising':
+            from ising.ising import (
+                IsingCompiler, IsingParams,
+                build_basis_reprs,
+            )
             model_params = IsingParams(**model_config)
             compiler = IsingCompiler(model_params)
-            parse_basis = lambda strings: build_ising_basis(model_params.L, strings)
-            initial_basis = lambda initial: build_ising_basis(model_params.L, initial)
+            parse_basis = lambda strings: build_basis_reprs(model_params.L, strings)
+            initial_basis = lambda initial: build_basis_reprs(model_params.L, initial)
             required_basis = parse_basis(basis_config['required'])
+
+        elif model_type == 'heisenberg':
+            from heisenberg.heisenberg import (
+                HeisenbergCompiler, HeisenbergParams,
+                build_basis_reprs,
+            )
+            model_params = HeisenbergParams(**model_config)
+            compiler = HeisenbergCompiler(model_params)
+            parse_basis = lambda strings: build_basis_reprs(model_params.L, strings)
+            initial_basis = lambda initial: build_basis_reprs(model_params.L, initial)
+            required_basis = parse_basis(basis_config['required'])
+
         else:
             raise ValueError(f'unknown model type: {model_type}')
 
@@ -71,9 +84,7 @@ class ModelAdapter:
         return cls(model_type, model_params, compiler, nga_params, basis, required_basis, start_step, records, events)
 
     def get_basis_rep(self, key):
-        if self.model_type == 'hubbard':
-            return MajoranaMonomial(self.model_params.L, key).canon_rep
-        return PauliString(self.model_params.L, key).canon_rep
+        return type(self.basis[0])(self.model_params.L, key).canon_rep
 
 
 if __name__ == '__main__':

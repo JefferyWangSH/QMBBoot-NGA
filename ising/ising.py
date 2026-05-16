@@ -222,6 +222,7 @@ class IsingParams:
     L: int = 8
     J: float = 1.
     h: float = 1.
+    hz: float = 0.
 
 
 def build_hamil(params: IsingParams):
@@ -232,6 +233,12 @@ def build_hamil(params: IsingParams):
     for shift in range(params.L):
         hamil_op.add(zz.translate(shift), -params.J / params.L)
         hamil_op.add(x.translate(shift), -params.h / params.L)
+
+    if params.hz != 0:
+        z = PauliString.from_str('Z'+'I'*(params.L-1))
+        for shift in range(params.L):
+            hamil_op.add(z.translate(shift), -params.hz / params.L)
+
     return hamil_op
 
 

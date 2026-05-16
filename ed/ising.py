@@ -15,7 +15,7 @@ def kron(ops):
         out = sparse.kron(out, op, format='csr')
     return out
 
-def hamil(L, J=1., h=1.):
+def hamil(L, J=1., h=1., hz=0.):
     if L < 2:
         raise ValueError('L must be at least 2')
 
@@ -30,13 +30,18 @@ def hamil(L, J=1., h=1.):
     for i in range(L):
         ops = [_id] * L
         ops[i] = _sz
+        H += -hz * kron(ops)
+
+    for i in range(L):
+        ops = [_id] * L
+        ops[i] = _sz
         ops[(i + 1) % L] = _sz
         H += -J * kron(ops)
 
     return H / L
 
-def gs(L, J=1., h=1., tol=1e-10, vec=False):
-    H = hamil(L, J=J, h=h)
+def gs(L, J=1., h=1., hz=0., tol=1e-10, vec=False):
+    H = hamil(L, J=J, h=h, hz=hz)
     if vec:
         vals, vecs = eigsh(H, k=1, which='SA', tol=tol)
         return float(vals[0]), vecs[:, 0]

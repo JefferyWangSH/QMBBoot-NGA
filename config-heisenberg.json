@@ -1,32 +1,33 @@
 {
-  "model_type": "ising",
+  "model_type": "heisenberg",
   "model": {
     "L": 16,
-    "J": 1.0,
-    "h": 1.0,
-    "hz": 0
+    "J1": 1.0,
+    "J2": 1.0
   },
   "basis": {
     "initial": [
       "I",
       "X",
+      "Y",
       "Z"
     ],
     "required": [
       "I",
       "X",
+      "Y",
       "Z"
     ]
   },
   "nga": {
     "solver_backend": "MOSEK",
     "solver_kwargs": {},
-    "drop_null_tol": 1e-8,
-    "grow_null_tol": 1e-8,
+    "drop_null_tol": 1e-7,
+    "grow_null_tol": 1e-7,
     "max_drop_leverage": 5e-2,
     "min_net_growth_per_step": 1,
-    "max_net_growth_per_step": 8,
-    "drop_cap_base_per_step": 8,
-    "drop_cap_rate": 0.1
+    "max_net_growth_per_step": 4,
+    "drop_cap_base_per_step": 0,
+    "drop_cap_rate": 0.05
   }
 }
