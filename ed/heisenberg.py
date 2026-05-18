@@ -31,12 +31,12 @@ def hamil(L, J1=1., J2=0.):
             ops = [_id] * L
             ops[i] = pauli
             ops[(i + 1) % L] = pauli
-            H += J1 * kron(ops)
+            H += .25 * J1 * kron(ops)
 
             ops = [_id] * L
             ops[i] = pauli
             ops[(i + 2) % L] = pauli
-            H += J2 * kron(ops)
+            H += .25 * J2 * kron(ops)
 
     return H / L
 

@@ -1,8 +1,129 @@
-### *1. Primal and dual SDPs*
+$$
+\gdef\trace{\operatorname{Tr}}
+\gdef\ket#1{\vert#1\rangle}
+\gdef\bra#1{\langle#1\vert}
+\gdef\innerprod#1#2{\langle #1 \vert #2 \rangle}
+\gdef\ksymm{\mathcal{K}}
+$$
+
+### *1. Quantum many-body bootstrap (QMBB) basic*
+Solving the groundstate of a general Hamiltonian,
+$$
+    \min_\rho \trace\left[\rho H\right] \quad \text{s.t.}\quad \rho^\dag=\rho,\ \trace\rho = 1,\ \rho\succcurlyeq 0.
+$$
+The density matrix $\rho$ is a positive semi-definite (PSD), normalized hermitian matrix. PSD means that for any state $\vert\phi\rangle$,
+$$
+    \langle\phi\vert\rho\vert\phi\rangle = \sum_i p_i \vert \innerprod{\phi}{\psi_i} \vert^2 \geqslant 0.
+$$
+Variational methods parameterize $\rho$ with controlled number of parameters, usually scaling with system size in a power law, by adopting wisely a variational ansatz $\rho_\theta$. The original problem is transformed into solving $\rho_\theta$, which yields strictly an upper bound of groundstate energy.
+
+Instead, bootstrap methods enlarge the target space of $\rho$ by relaxing the semi-definite constraints. Rewrite the PSD condition as
+$$
+    \rho\succcurlyeq 0 \ \iff\ \rho = O^\dag O \ \iff\ \forall S\succcurlyeq 0,\ \trace\left[\rho S\right] \geqslant 0.
+$$
+One relaxes $S$ to a set of chosen PSD matrix $S_i$ such that the original problem is reduced to an easier one,
+$$
+    \min_\rho \trace\left[\rho H\right] \quad \text{s.t.}\quad \rho^\dag=\rho;\ \trace\rho = 1;\ \forall\ S_i\succcurlyeq 0,\ \trace\left[\rho S_i\right] \geqslant 0.
+$$
+This gives strictly a lower bound of groundstate energy. The effectiveness of the method therefore relies on the wise choice of $S_i$ set.
+
+Consider an operator basis $\{O_i\}$, where the Hamiltonian can be represented as a linear combination of $O_i^\dag O_j$. For any operator $O=w_i O_i$, $O^\dag O$ is a PSD operator and we require
+$$
+    w_i^\ast w_j \trace \left[\rho O_i^\dag O_j\right] \geqslant 0.
+$$
+If we define $M_{ij}\overset{!}{=}\trace\left[\rho O_i^\dag O_j\right]=\langle O_i^\dag O_j\rangle$, the above positivity constraints state that $M$ is a PSD matrix. Obviously, not all entries of $M$ are independent; symmetries impose powerful constraints that either force elements to vanish or introduce linear dependencies among them. Other basic constraints include:
+* $\trace\rho=1$ requires $M_{11} = 1$;
+
+* $\rho^\dag = \rho$ yields $\langle O_i^\dag O_j\rangle^\ast = \langle O_j^\dag O_i\rangle$ such that $M$ is a hermitian.
+
+In practice, one reduces the number of independent moment expectations in $M_{ij}$ using *symmetries* and other physics-insighted constraints and can, in principle, sample them to check whether $M$ is a PSD matrix. This generates a set of feasible regions for the operator spectrum, including the energy. By considering increasingly large operator bases $\{O_i\}$, the result of the optimization problem approaches the exact value, yielding a hierarchy of estimations. Moreover, assuming symmetries, e.g. translational invariance, further helps reduce the moment matrix into symmetry blocks, which dramatically saves computational time.
+
+*Complexity:*
+
+$\text{\color{red}todo}$
+
+#### *1.1. Symmetry constraints*
+Suppose a Hamiltonian $H$ has a symmetry operation $g$. For a unitary symmetry, $g^{-1}Hg=H$. For an antiunitary symmetry, such as complex conjugation $\ksymm$ or time reversal $\mathcal{T}$, the same formal condition is written as $\ksymm^{-1}H\ksymm=H$ with the important caveat that $\ksymm^{-1} i \ksymm=-i$.
+
+A density matrix $\rho$ is symmetric under $g$ if $g^{-1}\rho g=\rho$ and a thermal density matrix $\rho\sim e^{-\beta H}$ is definitely symmetric. However, assuming that $\rho$ remains symmetric at zero temperature (ground state) is no longer a trivial statement.
+$$
+    H\ket{\psi_0} = E_0\ket{\psi_0}, \quad H g\ket{\psi_0} = E_0 g\ket{\psi_0}.
+$$
+If a system has a unique ground state, $g\ket{\psi_0}=e^{i\theta_g}\ket{\psi_0}$. As a result, the density matrix $\rho_0=\ket{\psi_0}\bra{\psi_0}$ is strictly invariant $g^{-1}\rho_0 g = \rho_0$. If the ground state is degenerate (symmetry breaking), an individual pure ground state need not be symmetric. A symmetry operation may map one ground state to another $g\ket{\psi_a}=\ket{\psi_b}$ and a symmetry-broken pure state can have a nonzero expectation value for a symmetry-odd order parameter. However, one can always construct a symmetric ground-state density matrix by averaging over the symmetry orbit,
+$$
+    \rho_\text{sym} = \frac{1}{\vert G\vert} \sum_{g\in G} g^{-1} \rho g.
+$$
+This symmetrized density matrix has the same energy as $\rho$. Therefore, for ground-state energy optimization, restricting to symmetric density matrices is usually without loss. The limitation is that symmetry-odd one-point order parameters vanish in $\rho_\text{sym}$, so spontaneous symmetry breaking must be diagnosed through symmetric observables such as two-point correlation functions, or by explicitly relaxing the symmetry constraint.
+
+> However, for finite-size systems, this issue should be interpreted carefully.
+>
+> In a phase that spontaneously breaks a discrete symmetry, the finite-size ground state is often a symmetric “cat” state rather than one of the symmetry-broken states. The symmetry-broken states emerge only in the thermodynamic limit, where a set of symmetry-related low-energy states become degenerate. For a discrete broken symmetry, the splitting between these quasi-degenerate states is typically exponentially small in system size. Consequently, for finite-size ground-state energy bounds, the symmetric-$\rho$ assumption is generally safe. The ordered phase can still be detected through symmetry-invariant quantities such as two-point correlations in the symmetric density matrix.
+>
+> There are exceptions where finite-size degeneracy is exact, for example due to an exact conserved quantum number, Kramers degeneracy, fine tuning, or topological order. In such cases, an individual pure ground state need not be symmetric, but a symmetric ground-state density matrix can still be constructed by averaging over the degenerate manifold, without changing the energy.
+>
+> For continuous symmetry breaking, the finite-size precursor is often an Anderson tower of states, where low-energy states in different symmetry sectors collapse onto the ground state algebraically with system size. [?]
+>
+
+In the bootstrap SDP, we explicitly assume a $G$-symmetric density matrix. For a pure state, this implies that the state must transform within a definite symmetry sector; however, for a mixed state, it allows the classical mixture of different quantum number sectors. Evaluating moment expectations in a symmetric density matrix yields constraints
+$$
+    \left\langle O\right\rangle = \trace\left[\rho O\right] = \trace\left[g^{-1}\rho g O\right] = \left\langle g O g^{-1}\right\rangle.
+$$
+for arbitrary operator $O$. For a discrete symmetry, $g$ enumerates over all group elements. For a continuous unitary symmetry, the same statement can be written infinitesimally. Let $g(\theta)=e^{i\theta Q}$ where $Q$ is Lie generator (symmetry charge). The symmetry condition on the density matrix is equivalently formulated as $\left[\rho, Q\right] = 0$, and we have
+$$
+    \left\langle O\right\rangle = \left\langle e^{i\theta Q} O e^{-i\theta Q}\right\rangle \overset{\theta\ll 1}{\implies} \left\langle \left[Q,O\right]\right\rangle=0,
+$$
+which are known as Ward-identity constraints associated with the continuous symmetry. These relations are used to reduce the number of moment variables and to impose linear consistency constraints in the SDP. Specifically, time translation is a continuous unitary transformation generated by the Hamiltonian $U=e^{-iHt}$ such that
+$$
+    \left\langle \left[H,O\right]\right\rangle = 0,
+$$
+given stationary states $[\rho,H]=0$. These constraints are often known as stationarity constraints. In practice, a good starting point is to generate constraints from moment operators $O=O_i^\dag O_j$.
+
+<a id="symmetry-blocks"></a>
+#### *1.2. Symmetry blocks*
+On many occasions, the system is invariant under translation $T(r)$ and we assume the density matrix does not break this symmetry such that $\left[\rho,T(r)\right]=0$. For bootstrap, we choose a set of translation representatives $\{O_a\}$ and build the full basis through translation,
+$$
+    \left\{O_a(r): T^\dag(r)O_a(0) T(r)\right\}.
+$$
+The moment matrix is constructed as
+$$
+\begin{aligned}
+    M_{ar,br'}
+    & \overset{!}{=} \left\langle O_a^\dag(r) O_b(r')\right\rangle
+    = \left\langle T^\dag(r) O^\dag_a(0) T(r-r') O_b(0) T(r')\right\rangle\\[10pt]
+    & = \trace\left[\underbrace{T(r') \rho T^\dag(r')}_{\rho} \underbrace{T^\dag(r-r') O^\dag_a(0) T(r-r')}_{O_a^\dag(r-r')} O_b(0)\right]\\[10pt]
+    & = \left\langle O_a^\dag(r-r') O_b(0)\right\rangle \overset{!}{=} M_{ab}(r-r').
+\end{aligned}
+$$
+Therefore $M$ is intrinsically a $L\times L$ block matrix with each block a $N\times N$ matrix where $N=\text{dim}(\{O_a\})$. To be more specific,
+$$
+    M = \begin{pmatrix}
+        M_0     & M^\dag_1 & M^\dag_2 & \cdots & M^\dag_{L-1}\\[5pt]
+        M_1     & M_0      & M^\dag_1 & \ddots & \vdots      \\[5pt]
+        M_2     & M_1      & M_0      & \ddots & \vdots      \\[5pt]
+        \vdots  & \ddots   & \ddots   & \ddots & \vdots      \\[5pt]
+        M_{L-1} & \cdots   & \cdots   & \cdots & M_0 
+    \end{pmatrix}.
+$$
+$M_0$ is a $N\times N$ hermitian while $M_1,\dots,M_{L-1}$ are not necessarily hermitians. $M$ is ready to be block diagonalized by switching to the momentum space through discrete Fourier transformation $O_a(k)=\frac{1}{\sqrt{L}}\sum_r O_a(r) e^{-ikr}$ and $k\in\{k_n=\frac{2\pi n}{L}, 0\leqslant n<L\}$. We obtain
+$$
+    \left\langle O^\dag_a(k) O_b(k')\right\rangle = \delta_{kk'} \sum_r e^{ikr} \left\langle O^\dag_a(r) O_b(0)\right\rangle,
+$$
+and $F^\dag M F=\bigoplus_k M(k)$. The PSD constraint $M\succcurlyeq 0$ is hence equivalent to $M(k)\succcurlyeq 0$ for all $k$ since Fourier transformation $F$ is unitary. In practice, solving SDP with $L$ number of small $M(k)$ is much more efficient than that with a large $M$; and one may involve more other symmetris to further simplify $M(k)$. We note that larger system size $L$ only provides linearly more PSD blocks, whose size is determined by the dimension of chosen basis but not $L$.
+
+Refer to:
+* https://arxiv.org/pdf/2406.17844 : extensive benchmark on TFIM
+
+* https://arxiv.org/pdf/2111.13007
+
+* https://github.com/EverettYou/QuantumBootstrap : bootstrap in the krylov space [?]
+
+* https://arxiv.org/pdf/2006.06002, https://arxiv.org/pdf/2410.00810 : Hubbard model
+
+### *2. Primal and dual SDPs*
 The standard primal semidefinite program is
 $$
-    \min_X\ \operatorname{Tr}(CX)
-    \quad \text{subject to}\quad X\succeq 0;\quad \operatorname{Tr}(A_i X)=b_i,\ i=1,\dots,m.
+    \min_X\ \trace(CX)
+    \quad \text{subject to}\quad X\succeq 0;\quad \trace(A_i X)=b_i,\ i=1,\dots,m.
 $$
 Note that
 * $X$ is the positive semidefinite matrix variable.
@@ -20,28 +141,28 @@ $$
 The matrix $S$ is the dual slack matrix. *Weak duality* states that for any primal-feasible $X$ and dual-feasible $y$, the feasible dual value is a rigorous lower bound on feasible primal energy. Consider
 $$
 \begin{aligned}
-    \operatorname{Tr}(CX)
-    &= \operatorname{Tr}\left[\left(S+\sum_i y_i A_i\right)X\right] \\[5pt]
-    &= \operatorname{Tr}(SX)+\sum_i y_i\operatorname{Tr}(A_iX) \\[5pt]
-    &= \operatorname{Tr}(SX)+\sum_i b_i y_i.
+    \trace(CX)
+    &= \trace\left[\left(S+\sum_i y_i A_i\right)X\right] \\[5pt]
+    &= \trace(SX)+\sum_i y_i\trace(A_iX) \\[5pt]
+    &= \trace(SX)+\sum_i b_i y_i.
 \end{aligned}
 $$
 Since $S\succeq 0$ and $X\succeq 0$,
 $$
-    \operatorname{Tr}(SX)\ge 0.
+    \trace(SX)\ge 0.
 $$
 Therefore it is proved that
 $$
-    \operatorname{Tr}(CX)\ge \sum_i b_i y_i.
+    \trace(CX)\ge \sum_i b_i y_i.
 $$
 
 Under regularity assumptions such as Slater-type interior feasibility, the primal and dual optimal values coincide (*strong duality*),
 $$
-    \operatorname{Tr}(CX^*) = \sum_i b_i y_i^*.
+    \trace(CX^*) = \sum_i b_i y_i^*.
 $$
 Combining this with the weak-duality identity gives
 $$
-    \operatorname{Tr}(S^*X^*)=0.
+    \trace(S^*X^*)=0.
 $$
 This is *complementary slackness*. Since both $S^*$ and $X^*$ are positive semidefinite, their supports are orthogonal. Directions where the dual slack matrix has positive eigenvalue must be null directions of the primal moment matrix.
 
@@ -57,7 +178,7 @@ Refs:
 * https://people.eecs.berkeley.edu/~elghaoui/Teaching/EE227A/lecture11.pdf
 * https://www.cs.cmu.edu/afs/cs.cmu.edu/academic/class/15859-f11/www/notes/lecture12.pdf
 
-### *2. Many-body bootstrap problem*
+### *3. Nullspace-Guided Adaptive (NGA) algorithm for many-body bootstrap problem*
 We formulate the many-body bootstrap problem first in terms of primal SDP:
 $$
 \begin{aligned}
@@ -67,7 +188,7 @@ $$
 $$
 Let $\mathbf{x}$ be the vector of independent expectation values of the operator algebra. The elements $M_{ij}$ are linear combinations of these expectation values: $M(\mathbf{x})=\sum_k x_k M^{(k)}$, where $M^{(k)}$ are constant symmetric (or more generally hermitian) matrices defining the algebraic structure.
 
-#### *2.1. Lagrangian dual problem*
+#### *3.1. Lagrangian dual problem*
 The clues of constructing the dual problem come from the Lagrangian. Introduce multipliers:
 * A vector $\boldsymbol{\lambda}$ for the affine constraints $A\mathbf{x}=\mathbf{b}$.
 * A PSD matrix $Y\succeq 0$ for the moment-matrix constraint $M(\mathbf{x})\succeq 0$.
@@ -77,7 +198,7 @@ $$
     L(\mathbf{x},\boldsymbol{\lambda},Y)
     = \mathbf{c}^T\mathbf{x}
     - \boldsymbol{\lambda}^T(A\mathbf{x}-\mathbf{b})
-    - \operatorname{Tr}\left[Y M(\mathbf{x})\right].
+    - \trace\left[Y M(\mathbf{x})\right].
 $$
 For any primal-feasible $\mathbf{x}$, $A\mathbf{x}=\mathbf{b}$ and $M(\mathbf{x})\succeq 0$. Therefore
 $$
@@ -108,11 +229,11 @@ $$
     \forall\ \mathbf{x}, \quad
     \mathbf{c}^T\mathbf{x}
     = \boldsymbol{\lambda}^T A\mathbf{x}
-    + \operatorname{Tr}\left[Y M(\mathbf{x})\right].
+    + \trace\left[Y M(\mathbf{x})\right].
 $$
 This is equivalent to
 $$
-    c_k = \left(A^T\boldsymbol{\lambda}\right)_k + \operatorname{Tr}\left[Y M^{(k)}\right], \quad k=1,\dots,n.
+    c_k = \left(A^T\boldsymbol{\lambda}\right)_k + \trace\left[Y M^{(k)}\right], \quad k=1,\dots,n.
 $$
 When this identity holds, the Lagrangian reduces to the constant $L(\mathbf{x},\boldsymbol{\lambda},Y) = \boldsymbol{\lambda}^T\mathbf{b}$,
 so
@@ -126,7 +247,7 @@ $$
     \boldsymbol{\lambda}^T\mathbf{b}\\[5pt]
     &\text{subject to}\quad
     Y\succeq 0;
-    \quad c_k = \left(A^T\boldsymbol{\lambda}\right)_k + \operatorname{Tr}\left[Y M^{(k)}\right].
+    \quad c_k = \left(A^T\boldsymbol{\lambda}\right)_k + \trace\left[Y M^{(k)}\right].
 \end{aligned}
 $$
 For any feasible bootstrap moment vector $\mathbf{x}$, the same identity gives
@@ -134,9 +255,9 @@ $$
 \begin{aligned}
     \mathbf{c}^T\mathbf{x}
     &= \boldsymbol{\lambda}^T A\mathbf{x}
-    + \operatorname{Tr}\left[Y M(\mathbf{x})\right] \\[5pt]
+    + \trace\left[Y M(\mathbf{x})\right] \\[5pt]
     &= \boldsymbol{\lambda}^T\mathbf{b}
-    + \operatorname{Tr}\left[Y M(\mathbf{x})\right] \\[5pt]
+    + \trace\left[Y M(\mathbf{x})\right] \\[5pt]
     &\ge \boldsymbol{\lambda}^T\mathbf{b}.
 \end{aligned}
 $$
@@ -154,17 +275,17 @@ Therefore $\boldsymbol{\lambda}^T\mathbf{b}$ is the certified energy lower bound
 > $$
 >     \mathbf{c}^T\mathbf{x} - \boldsymbol{\lambda}^T\mathbf{b}.
 > $$
-> Small primal residual means the moment assignment nearly satisfies $A\mathbf{x}=\mathbf{b}$ and $M(\mathbf{x})\succeq 0$. Small dual residual means the certificate nearly satisfies $Y\succeq 0$ and $c_k=(A^T\boldsymbol{\lambda})_k+\operatorname{Tr}[YM^{(k)}]$. Small duality gap means the candidate moment world and the certificate prove essentially the same energy.
+> Small primal residual means the moment assignment nearly satisfies $A\mathbf{x}=\mathbf{b}$ and $M(\mathbf{x})\succeq 0$. Small dual residual means the certificate nearly satisfies $Y\succeq 0$ and $c_k=(A^T\boldsymbol{\lambda})_k+\trace[YM^{(k)}]$. Small duality gap means the candidate moment world and the certificate prove essentially the same energy.
 >
 > The primal and dual optimal values converge to the same value when strong duality holds and the solver reaches sufficient numerical accuracy. A standard sufficient condition is a Slater-type interior point: roughly, there is a strictly feasible primal point with $M(\mathbf{x})\succ 0$ satisfying the affine constraints, and a strictly feasible dual certificate with $Y\succ 0$ satisfying the dual stationarity equations. In bootstrap problems this condition can be weakened or fail because symmetries and Ward identities often force exact null directions, but strong duality can still hold after restricting to the correct support. Numerically, one should therefore expect equality only up to solver tolerance.
 
-#### *2.2. Dual operator identity*
+#### *3.2. Dual operator identity*
 Start from the dual identity obtained above:
 $$
     \forall\ \mathbf{x}, \quad
     \mathbf{c}^T\mathbf{x}
     = \boldsymbol{\lambda}^T A\mathbf{x}
-    + \operatorname{Tr}\left[Y M(\mathbf{x})\right].
+    + \trace\left[Y M(\mathbf{x})\right].
 $$
 This identity is first a statement about linear functionals of the moment vector $\mathbf{x}$. To read it as an operator identity, identify the three pieces one by one.
 
@@ -204,7 +325,7 @@ This identity is first a statement about linear functionals of the moment vector
     $$
     Then
     $$
-        \operatorname{Tr}\left[Y M(\mathbf{x})\right]
+        \trace\left[Y M(\mathbf{x})\right]
         = \sum_a \langle \mathcal{P}_a^\dag \mathcal{P}_a\rangle.
     $$
     $Y$ denotes the coefficients of SOS operators.
@@ -232,7 +353,7 @@ This is an *operator identity* at the level of the truncated operator algebra. V
 
 For any feasible bootstrap moment assignment, the filling and Ward terms have zero expectation and the SOS term is nonnegative. This proves $\langle \mathcal{H}\rangle\ge E_{\mathrm{bound}}$. Strictly speaking, this is a projected identity in the current truncated bootstrap algebra, not necessarily an exact identity in the full operator algebra unless the chosen basis is closed under all generated terms.
 
-#### *2.3. Complementary slackness*
+#### *3.3. Complementary slackness*
 For a certified optimal solution, we often expect the primal and dual values to meet up to numerical tolerance,
 $$
     \langle \mathcal{H}\rangle^* \simeq E_{\mathrm{bound}}^*.
@@ -246,7 +367,7 @@ where the filling and Ward terms vanish on the feasible primal moment assignment
 $$
     \left\langle \mathcal{P}_a^{*\dag}\mathcal{P}_a^* \right\rangle_{\mathbf{x}^*} \simeq 0.
 $$
-This is the bootstrap version of *complementary slackness*. In matrix form it says $\operatorname{Tr}\left[Y^*M(\mathbf{x}^*)\right]\simeq 0$. Since both $Y^*\succeq 0$ and $M(\mathbf{x}^*)\succeq 0$, this trace can vanish only when their positive supports are orthogonal. Equivalently, positive eigendirections of the dual SOS matrix $Y^*$ must lie in the nullspace of the primal moment matrix $M(\mathbf{x}^*)$,
+This is the bootstrap version of *complementary slackness*. In matrix form it says $\trace\left[Y^*M(\mathbf{x}^*)\right]\simeq 0$. Since both $Y^*\succeq 0$ and $M(\mathbf{x}^*)\succeq 0$, this trace can vanish only when their positive supports are orthogonal. Equivalently, positive eigendirections of the dual SOS matrix $Y^*$ must lie in the nullspace of the primal moment matrix $M(\mathbf{x}^*)$,
 $$
     \mathcal{P}_a^*\left|\psi^*_0\right\rangle \simeq 0.
 $$
@@ -261,7 +382,7 @@ $$
 $$
 and build the next SDP using the null directions $\mathcal{P}_a^*$, or equivalently restrict the moment matrix to the nullspace of $M(\mathbf{x}^*)$. This however makes the PSD constraints dense. In practice, we prune the representatitve basis based on its leverage in the nullspace.
 
-#### *2.4. How to grow $\mathcal{S}$?*
+#### *3.4. How to grow $\mathcal{S}$?*
 Pruning alone does not usually improve the bootstrap bound. It removes representatives weakly involved in the current null relations, but the improvement comes from adding new operators to the PSD test space. A useful growth rule is to use the null operators discovered in the previous SDP. If
 $$
     \mathcal{P}_a|\psi_0\rangle\simeq 0,
@@ -298,7 +419,7 @@ After each solve, the primal nullspace and the dual SOS certificate propose appr
 
 From the dual viewpoint, the same loop is also an iterative search for a better SOS certificate. When the basis is sufficiently strong, one hopes that the surviving stable $\mathcal{P}_a$ yield the true physical annihilators of the ground state. However, $\mathcal{P}_a^\dag$ is not automatically a strict excitation creation operator as $\mathcal{P}_a^\dag|\psi_0\rangle$ may not be an energy eigenstate. Therefore $\mathcal{P}_a^\dag$ should be viewed as an excitation-channel candidate, not automatically as a strict quasiparticle operator. In other words, the SOS certificate supplies candidate null relations, while the excitation problem lives on the remaining support.
 
-### *3. Implementation of Nullspace-Guided Adaptive (NGA) algorithm*
+### *4. NGA implementation*
 The raw basis is a list of translation representatives,
 $$
     \mathcal{S}=\{\mathcal{O}_\alpha\},
@@ -369,7 +490,7 @@ flowchart LR
 
 Its physical interpretation is that the primal near-nullspace proposes approximate ground-state annihilators, while Hamiltonian descendants test whether those annihilators close under the dynamics (if so, they are more likely to be physical).
 
-#### *3.1. Local commutator cache*
+#### *4.1. Local commutator cache*
 The naive growth procedure is expensive because each near-null PSD direction constructs a Fourier-expanded null operator and then calculates the commutator. For one momentum sector, write schematically
 $$
     \mathcal{O}_a(k) = \frac{1}{\sqrt{L}} \sum_r e^{-ikr} \mathcal{O}_a(r).
@@ -429,3 +550,298 @@ with cost $O[D_k\ \mathrm{nnz}(C)]$ per momentum block and $\mathrm{nnz}(C)=\lef
 $$
     O(DBL).
 $$
+
+### *5. Ising chain*
+$$
+    H = \sum_i -J Z_i Z_{i+1} - h X_i - h_z Z_i.
+$$
+The $2^N$-dim many-body basis are constructed via the tensor product $\ket{\sigma}=\bigotimes_{i=1}^{N}\vert\sigma_i\rangle$, where each local state $\vert\sigma_i\rangle$ is an eigenstate of $Z_i$ with eigenvalue $\sigma_i$. A general state $\ket{\psi}$ is a linear combination of $\ket{\sigma}$, $\ket{\psi}=\sum_\sigma a_\sigma\ket{\sigma}$, usually denoted as a $2^N$-dim column vector $(\dots, a_\sigma, \dots)^T$.
+
+#### *5.1. Symmetry revisited*
+General symmetries can be divided into basically two classes, unitary symmetries
+$$
+    \ket{\psi} \to U \ket{\psi},
+$$
+and anti-unitary symmetries
+$$
+    \ket{\psi} \to U \ksymm\ket{\psi} = U\ket{\psi}^\ast,
+$$
+where $\ksymm$ denotes the operation of complex conjugation and $\ksymm^2=1$. $\ksymm$ is anti-unitary because first it is anti-linear
+$$
+    \ksymm\ket{\psi} \overset{!}{=} \ket{\psi}^\ast = \sum_\sigma a_\sigma^\ast \ket{\sigma}.
+$$
+It satisfies
+$$
+    \langle\ksymm\phi\vert\ksymm\psi\rangle = \innerprod{\phi}{\psi}^\ast,
+$$
+which is consistent with *Wigner theorem* stating that two states transformed under the symmetry should have a preserved inner product amplitude. The Wigner theorem also forbids any mixed operation, $\ket{\psi} \to U_1 \ket{\psi} + U_2\ksymm \ket{\psi}$,to be a symmetry. Equivalently, in the Heisenberg picture, an operator $O$ transforms as $O \to U^\dag O U$ under unitary symmetries and as $O \to \ksymm U^\dag O U \ksymm$ under anti-unitary symmetries, with the operators applied sequentially from right to left. The anti-unitary operation $\ksymm O \ksymm$ is understood by acting it on an arbitrary state, which yields
+$$
+    \ket{\ksymm O \ksymm \psi}_{\sigma'}
+    = \sum_\sigma \left(O_{\sigma'\sigma} a_\sigma^\ast \ket{\sigma}\right)^\ast
+    = \sum_\sigma O^\ast_{\sigma'\sigma} a_\sigma \ket{\sigma}
+    = \ket{O^\ast \psi}_{\sigma'},
+$$
+and $\ksymm O \ksymm = O^\ast$.
+
+#### *5.2. $\ksymm$-symmetry*
+For the transverse-field Ising (TFI) chain, we consider the simplest anti-unitary symmetry $\ksymm$. The Hamiltonian in our chosen basis $\{\ket{\sigma}\}$ is expressed as a purely real matrix $H^\ast=H$, and is hence invariant under complex conjugation $\ksymm$,
+$$
+    \ksymm H \ksymm = H.
+$$
+Assuming $\ket{\psi}$ is an eigenstate of $H$, we have
+$$
+    H \ket{\psi} = \ksymm H \ksymm \ket{\psi} = E \ket{\psi} \implies H \ket{\psi}^\ast = E \ket{\psi}^\ast.
+$$
+Therefore, $\ket{\psi}$ and $\ket{\psi}^\ast$ have the same energy. The logic is that if $\ket{\psi}$ and $\ket{\psi}^\ast$ are linearly independent, we can construct
+$$
+    \ket{\psi_+} \sim \ket{\psi} + \ket{\psi}^\ast, \quad
+    \ket{\psi_-} \sim i \left(\ket{\psi} - \ket{\psi}^\ast\right),
+$$
+and both $\ket{\psi_\pm}$ are purely real-valued, $\ksymm$-even states. Otherwise, if $\ket{\psi}$ and $\ket{\psi}^\ast$ are the same state, then $\ket{\psi}$ itself is real-valued.  This guarantees that all energy eigenstates can be safely chosen as purely real-valued and $\ksymm$-even states without loss of generality. Note this is equivalent to stating that  the density matrix $\rho = \sum_n p_n \ket{\psi_n}\langle\psi_n\vert$ can be chosen as real-valued, symmetric and $\ksymm$-even matrices, where $\ket{\psi_n}$ can be any normalized $\ksymm$-even pure state. Below we will stick to the Heisenberg picture and assume a $\ksymm$-even density matrix $\rho_+$ throughout. This extends our discussions to mixed states such as thermal density matrix $\rho\sim e^{-\beta H}$ with very little effort.
+
+To proceed, we categorize the operators based on their parity under $\ksymm$ into $\ksymm$-even and $\ksymm$-odd classes.
+$$
+    O = \underbrace{\frac{1}{2}\left(O + O^\ast\right)}_{O_+} + \underbrace{\frac{1}{2}\left(O - O^\ast\right)}_{O_-},
+$$
+and $\ksymm O_\pm\ksymm = O_\pm^\ast = \pm O_\pm$. The Hamiltonian $H$ is obviously $\ksymm$-even. Also, the $\ksymm$-parity is multiplicative, following a $\mathbb{Z}_2$ grading algebra: $O_\pm O_\pm=O_+$ and $O_\pm O_\mp=O_-$. For TFI chain, we consider a set of operators $\{O_i\}$ and each $O_i$ is a Pauli string $O=\bigotimes_{i=1}^N \sigma^\alpha_i$. $\ksymm$ symmetry applies on such a Pauli string as
+$$
+    \ksymm \left(\bigotimes_{i=1}^N \sigma^\alpha_i\right) \ksymm = \bigotimes_{i=1}^N \ksymm \sigma^\alpha_i \ksymm.
+$$
+Hence to determine whether a Pauli string is $K$-even or $K$-odd is simply to count the number of $Y$ operators it contains, $\ksymm O\ksymm = (-1)^{N_y} O$. Note that given a $\ksymm$-even $\rho_+$,
+$$
+    \langle O_\pm\rangle
+    = \trace \left[\rho_+ O_\pm\right]
+    = \pm \trace \left[\rho_+ \ksymm O_\pm \ksymm\right]
+    = \pm \trace \left[\rho_+ O_\pm^\ast \right]
+    = \pm \langle O_\pm\rangle^\ast.
+$$
+Therefore, $\langle O_+\rangle$ is real and $\langle O_-\rangle$ is purely imaginary with $O_\pm$ here not necessarily a hermitian.
+
+We will show that the presence of $\ksymm$-symmetry facilitates the bootstrap calculation in the following aspects:
+
+* It reveals the intrinsic structure of the moment matrix $M_{ij}=\langle O^\dag_i O_j\rangle$ such that we can transform it into a real-valued matrix. Assuming that we divide the Pauli string basis $\{O_i\}$ by class $\{O_+,O_-\}$, the moment matrix is expressed into a block form based on our discussion above
+  $$
+        M = \begin{pmatrix}M_1 & iM_3\\[5pt]-iM_3^T & M_2\\\end{pmatrix},
+  $$
+  where $M_1$ and $M_2$ are real symmetric matrices and $M_3$ a real matrix. This intrinsic structure of $M$ facilitates SDP calculations if we further consider a unitary transformation
+  $$
+        U = \begin{pmatrix}I & 0\\ 0 & iI\\\end{pmatrix}, \quad
+        \tilde{M} = U^\dag M U = \begin{pmatrix}M_1 & -M_3\\[5pt]-M_3^T & M_2\\\end{pmatrix}.
+  $$
+  Now $\tilde{M}$ is a real symmetric matrix and by construction $M\succcurlyeq 0$ is equivalent to $\tilde{M}\succcurlyeq 0$. Since the backend SDP solvers are fundamentally designed to operate natively on real numbers, the bootstrap calculation shall benefit significantly from condensing $M$ from a hermitian to a symmetric matrix.
+ 
+  > The above discussion applies in the real-space basis where $\{O_i\}$ involve all translation equivalents. In terms of moment PSD blocks as introduced in [Sec 1.2](#symmetry-blocks), $\ksymm$ symmetry imposes direct relation among $M(k)$. Because $\ksymm O_a(r)\ksymm = \eta_a O_a(r)$ with $\eta_a=\pm 1$ the $\ksymm$ parity of Pauli string $O_a$, we have
+  > $$
+  >     \ksymm O_a(k) \ksymm = \frac{1}{\sqrt{L}} \sum_r \ksymm \left[O_a(r) e^{-ikr}\right] \ksymm = \eta_a O_a(-k),
+  > $$
+  > and $\ksymm O^\dag_a(k) O_b(k) \ksymm = \eta_a\eta_b O^\dag_a(-k) O_b(-k)$. Assuming $\ksymm\rho\ksymm=\rho$, this leads to
+  > $$
+  >     \left\langle O^\dag_a(k) O_b(k) \right\rangle^\ast = \eta_a\eta_b \left\langle O^\dag_a(-k) O_b(-k) \right\rangle \iff M(k)^\ast = \text{diag}(\eta)\ M(-k)\ \text{diag}(\eta).
+  > $$
+  > Therefore, $\ksymm$ symmetry relates moment blocks with opposite momenta and yields
+  > $$
+  >     M(k)\succcurlyeq 0 \iff M^\ast(k)\succcurlyeq 0 \iff M(-k)\succcurlyeq 0.
+  > $$
+  > In the first step, $M(k)\succcurlyeq 0$ implies $M^\ast(k)\succcurlyeq 0$ since $M^\ast(k)=M^T(k)$ for hermitian $M(k)$. Then $M(k)\succcurlyeq 0$ and $M(-k)\succcurlyeq 0$ become equivalent because $\text{diag}(\eta)=\text{diag}(\dots,\eta_a,\dots)$ is unitary. This reduces the number of independent momentum PSD blocks by half with each $M(k)$ a hermitian.
+  >
+
+* It reduces the number of moment variables. In bootstrap, we identify the expectation values of Pauli strings $\mathcal{O}_{ij}$, associated to moment operators $O^\dag_i O_j$, as moment variables. A Pauli string is hermitian by nature, while it may differ from $O^\dag_i O_j$ by a pure real or imaginary factor and may have opposite parity. Consider a $\ksymm$-odd Pauli string, its expectation is purely complex given a symmetric $\rho_+$. And because Pauli string is a hermitian, its expectation must be real. This yields that the expectation of $K$-odd $\mathcal{O}_{ij}$ must vanish and we only need to consider $K$-even ones as moment variables.
+
+* It implies that nontrivial stationarity constraints, $\langle[H,O]\rangle=0$ can only be generated from $K$-odd Pauli strings $\mathcal{O}_{ij}$. By definition, $[H, \mathcal{O}_{ij}]$ shares identical parity with $\mathcal{O}_{ij}$ and is anti-hermitian as long as $\mathcal{O}_{ij}$ is hermitian. Furthermore, if $\mathcal{O}_{ij}$ is $\ksymm$-even, we deduce $\langle[H, \mathcal{O}_{ij}]\rangle \in \mathbb{R}$ from the fact that $[H, \mathcal{O}_{ij}]$ is $\ksymm$-even. However, the anti-hermiticity of $[H, \mathcal{O}_{ij}]$ ensures its expectation value to be purely imaginary. And we conclude $\langle[H, \mathcal{O}_{ij}]\rangle \equiv 0$ from deduction. As a result, only $\ksymm$-odd $\mathcal{O}_{ij}$ generates valid stationarity constraints.
+
+For TFI chain and general real-matrix Hamiltonians under certain basis, the assumption of real symmetric $\rho$ is physically natural. However, if the $\ksymm$-symmetry is spontaneously broken, e.g. by a non-trivial spin current, it can not see the symmetry-odd one-point order parameter, but the ordered phase may still be detected in symmetry-even two-point correlations. How to bootstrap dynamics? (find refs.)
+
+### *6. Hubbard chain*
+$$
+    H = -t \sum_{i,\sigma} \left(c^\dag_{i,\sigma} c_{i+1,\sigma} + c^\dag_{i+1,\sigma} c_{i,\sigma}\right) + U \sum_i \left(n_{i\uparrow}-\frac{1}{2}\right) \left(n_{i\downarrow}-\frac{1}{2}\right).
+$$
+Consider Majorana fermion operators, $\gamma_1=c^\dag+c$ and $\gamma_2=i(c^\dag-c)$, where $\gamma_a$ are hermitian and obey the Clifford algebra $\{\gamma_a,\gamma_b\}=2\delta_{ab}$. The local Hilbert space of Hubbard chain is 4-dim such that the local operator space is 16-dim, spanned by all Majorana monomials generated from the four local Majorana modes $\gamma_{i,\sigma}^a$. In [operators/majorana.py](operators/majorana.py), the local operator basis is encoded as a 4-bit nibble. In terms of Majorana fermions, the Hubbard chain becomes
+$$
+    H = \frac{t}{2} \sum_{i,\sigma} \gamma^T_{i,\sigma} Y \gamma_{i+1,\sigma} - \frac{U}{4} \sum_{i} \gamma^1_{i\uparrow} \gamma^2_{i\uparrow} \gamma^1_{i\downarrow} \gamma^2_{i\downarrow}.
+$$
+
+#### *6.1. $U(1)$ symmetry and Fermion parity*
+The particle number $N$ is the conserved charge generating the global $U(1)$ symmetry, $U(\theta)=e^{i\theta N}$. It acts on fermion operators as
+$$
+    U(\theta)c U(\theta)^{-1}=e^{-i\theta} c, \quad U(\theta)c^\dag U(\theta)^{-1}=e^{i\theta}c^\dag.
+$$
+For Majorana operators,
+$$
+    U(\theta)
+    \begin{pmatrix}\gamma_1\\ \gamma_2\end{pmatrix}
+    U(\theta)^{-1}
+    = \begin{pmatrix}
+     \cos\theta & \sin\theta\\
+    -\sin\theta & \cos\theta
+    \end{pmatrix}
+    \begin{pmatrix}\gamma_1\\ \gamma_2\end{pmatrix}.
+$$
+The fermion parity operator $P=(-1)^N$ is the special group element at $\theta=\pi$. Thus fermion parity is the $\mathbb{Z}_2$ subgroup of the particle-number $U(1)$ symmetry. Fermion parity can remain a symmetry even when the full $U(1)$ symmetry is absent, as in pairing Hamiltonians where particle number changes by pairs.
+
+The superselection principle claims that coherent superpositions between opposite parity sectors are not physical (while classical mixtures of opposite-parity states are permitted). For example, BCS wave function mixes states with different particle numbers yet still with same parity, and there is no spontaneous $P$-broken states observed in laboratory. Equivalently, every physical $\rho$ must commute with fermion parity, $[\rho,P]=0$, such that $\langle O\rangle = \langle P^{-1} O P\rangle$ for any operator $O$. In our case, each Majorana fermion is parity-odd, $P^{-1}\gamma_a P=-\gamma_a$. Therefore a Majorana monomial $\Gamma=\prod\gamma_i^a$ with degree $q$ transforms as $P^{-1} \Gamma P = (-1)^q \Gamma$. As a result, odd-degree monomial moments must have vanishing expectation value according to the parity constraint,
+$$
+    \left\langle \Gamma\right\rangle = \left\langle P^{-1} \Gamma P\right\rangle = -\left\langle \Gamma\right\rangle, \quad\text{s.t.}\quad \left\langle \Gamma\right\rangle = 0.
+$$
+
+Moreover, assuming the full $U(1)$ symmetry $[\rho,N]=0$ gives stronger Ward identities $\langle[N,\Gamma]\rangle=0$, which remove all operators carrying nonzero particle-number charge, including pairing moments such as $\langle c_i c_j\rangle$. Since Majorana moments are generally not eigenoperators of $U(1)$ operations, the $U(1)$ selection rule is not simply implemented by discarding individual Majorana monomials. Instead, the $U(1)$ constraints can be generated by directly computing the Ward identities, analogously to stationarity constraints.
+
+For the spinful Hubbard Hamiltonian, the spin-up and spin-down particle numbers are separately conserved. Therefore we actually have a $U_\uparrow(1)\times U_\downarrow(1)$ symmetry, and also $P_\uparrow\times P_\downarrow$. The parity constraints eliminate monomial moments containing an odd number of Majoranas for each spin, and the full continuous symmetries yield Ward identities $\left\langle[N_\sigma, \Gamma]\right\rangle=0$ for each spin $\sigma$.
+
+Note that $[\rho,N]=0$ only forbids coherent superpositions between different charge sectors. And it still permits a classical mixture of states with different particle numbers. To fix the filling and compare directly with ED, we further impose $\left\langle N\right\rangle=N_0$ and $\left\langle(N-N_0)^2\right\rangle=0$.
+
+#### *6.2. Complex conjugation $\ksymm$*
+The Hubbard model stays invariant under complex conjugation $\ksymm$, which is an anti-unitary symmetry with $\ksymm^2=1$ and
+$$
+    \ksymm i\ksymm = -i, \quad \ksymm c_{i\sigma}\ksymm = c_{i\sigma}, \quad \ksymm c^\dag_{i\sigma}\ksymm = c^\dag_{i\sigma}.
+$$
+Majorana fermions transform accordingly as $\ksymm \gamma_a\ksymm = \eta_a \gamma_a$ with $\eta_1=1$ and $\eta_2=-1$. The $\ksymm$-parity of a Majorana monomial is thus determined by counting the number of $\gamma_2$ and further taking into account the hermitian phase when the monomial is hermitianized. Anyway, a similar optimization can be made as compared to the Ising model including pruning $\ksymm$-odd monomials from variables, identifying dependent PSD blocks with opposite momentum, and using only $\ksymm$-odd monomials for building Ward identities with $\ksymm$-even generators such as $H$ and $N$.
+
+The assumed $\ksymm$-invariance of $\rho$ forbids the direct detection of non-zero current expectation values, such as charge and spin currents, $j^c\sim \sum_\sigma i(c^\dag_{x+1,\sigma}c_{x,\sigma}-c^\dag_{x,\sigma}c_{x+1,\sigma})$ and $j^s\sim \sum_\sigma i\sigma (c^\dag_{x+1,\sigma}c_{x,\sigma}-c^\dag_{x,\sigma}c_{x+1,\sigma})$, since both of them are $\ksymm$-odd operators. However, current-current correlations are $\ksymm$-even and therefore computable. A non-zero $\langle j^c\rangle$ also breaks time-reversal symmetry while $\langle j^s\rangle$ need not.
+
+#### *6.3. Spin $SU(2)$*
+todo: further rotate $M(k)$ to spin irreps.
+
+#### *6.4. Time reversion*
+todo
+
+#### *6.5. Particle-hole and $\eta$-pairing at half-filling*
+todo
+
+### *7. $J_1$-$J_2$ Heisenberg chain*
+Spin-$1/2$ $J_1$-$J_2$ Heisenberg chain
+$$
+\begin{aligned}
+    H &= J_1 \sum_i \mathbf{S}_i \cdot \mathbf{S}_{i+1} + J_2 \sum_i \mathbf{S}_i \cdot \mathbf{S}_{i+2}\\[5pt]
+    &= J_1/4 \sum_{i,a} \sigma^a_i \sigma^a_{i+1} + J_2/4 \sum_{i,a} \sigma^a_i \sigma^a_{i+2}.
+\end{aligned}
+$$
+Let $\alpha=J_2/J_1$ in the antiferromagnetic frustrated regime $J_1>0$, $J_2\geq0$. The thermodynamic phase diagram is
+* $0\leq\alpha<\alpha_c$: gapless Luttinger liquid connected to the nearest-neighbor Heisenberg chain at $\alpha=0$.
+* $\alpha_c\simeq0.241167$: Berezinskii-Kosterlitz-Thouless transition.
+* $\alpha>\alpha_c$: gapped dimerized phase with two symmetry-related dimer patterns.
+* $\alpha=1/2$: Majumdar-Ghosh point, where the two nearest-neighbor singlet dimer coverings are exact ground states.
+* At larger $\alpha$, the system remains dimerized but spin correlations become increasingly incommensurate.
+
+Although the dimerized phase spontaneously breaks one-site translation in a pure thermodynamic ground state, the Hamiltonian remains one-site translation invariant. For energy-density bootstrap bounds, one can still restrict to a one-site translation-invariant density matrix: the symmetric mixture of the two dimerized ground states has the same energy. However, this forces the one-point dimer order parameter
+$$
+    \left\langle
+    \mathbf{S}_i\cdot\mathbf{S}_{i+1}
+    - \mathbf{S}_{i+1}\cdot\mathbf{S}_{i+2}
+    \right\rangle
+$$
+to vanish. Dimerization should instead be diagnosed either with a two-site unit cell or with translation-invariant dimer-dimer correlations. Similar arguments apply for $SO(3)$ symmetry and many others.
+
+#### *7.1. $SO(3)$ symmetry*
+The isotropic Heisenberg chain has full spin-rotation symmetry. On states this is implemented by $SU(2)$, while on Pauli-vector operators it descends to $SO(3)$. We use the $SO(3)$ language below because the SDP moments are built from Pauli strings. In principle, one can use the full non-abelian $SO(3)$ symmetry to reduce PSD matrices. The operator basis at fixed momentum carries a representation of $SO(3)$,
+$$
+    \mathcal{U}(R)^\dag \mathcal{O}_a(k) \mathcal{U}(R)=\sum_b D_{ba}(R)\mathcal{O}_b(k).
+$$
+For an $SO(3)$-invariant density matrix, the moment matrix must commute with this representation. After rotating the Pauli-string basis into irreducible tensor sectors,
+$$
+    \mathcal{S}(k)\simeq\bigoplus_\ell\left(V_\ell\otimes\mathbb{C}^{m_\ell}\right),
+$$
+Schur's lemma gives
+$$
+    M(k)=\bigoplus_\ell\left(I_{2\ell+1}\otimes A_\ell(k)\right),\quad A_\ell(k)\succeq0.
+$$
+This would be the clean full-$SO(3)$ PSD block decomposition. We do not start with it because Pauli strings are not irreducible tensor operators; constructing this basis requires Clebsch-Gordan-like linear combinations and would complicate the prototype.
+
+The practical plan is therefore twofold. First, use an abelian subgroup of the $SO(3)$ action to reduce PSD blocks. The convenient choice is the proper $\pi$-rotation subgroup
+$$
+    C_2\times C_2=\{1, R_{xy}, R_{yz}, R_{zx}\},
+$$
+where
+$$
+\begin{aligned}
+    &R_{xy}: \mathcal{O}\mapsto (-1)^{N_X+N_Y}\mathcal{O},\\[5pt]
+    &R_{yz}: \mathcal{O}\mapsto (-1)^{N_Y+N_Z}\mathcal{O},\\[5pt]
+    &R_{zx}: \mathcal{O}\mapsto (-1)^{N_Z+N_X}\mathcal{O}.
+\end{aligned}
+$$
+Here $N_X,N_Y,N_Z$ count the Pauli labels in the normal-form monomial $\mathcal{O}$. Since Pauli strings are eigenoperators of this abelian subgroup, if the density matrix is invariant under this subgroup, any monomial odd under one of these rotations has zero expectation value. Hence a necessary condition for a nonzero moment is
+$$
+    N_X = N_Y = N_Z \pmod 2.
+$$
+
+The same $C_2\times C_2$ charge can further block diagonalize each momentum PSD block. If $O_a(-k)$ and $O_b(k)$ carry different $\pi$-rotation charges, then $\langle O_a(k)^\dag O_b(k)\rangle=0$. Thus
+$$
+    M(k)=\bigoplus_q M_q(k),\quad q\in C_2\times C_2.
+$$
+
+Second, we impose the full continuous $SO(3)$ symmetry as affine Ward identities,
+$$
+    \left\langle [S^a_{\mathrm{tot}},\mathcal{O}]\right\rangle=0,\quad a=x,y,z.
+$$
+Thus the abelian subgroup gives an immediate PSD-size reduction in the original Pauli-string basis, while the full non-abelian $SO(3)$ still contributes useful linear constraints without requiring an irrep rotation.
+
+#### *7.2. Sign symmetry*
+Single-axis substitutions such as
+$$
+    F_x: (X,Y,Z) \mapsto (-X,Y,Z)
+$$
+are not $SO(3)$ rotations, but the Heisenberg Hamiltonian is still invariant under them. Together with $F_y$ and $F_z$, they form a sign-flip group
+$$
+    C_2^3 = \{(s_x,s_y,s_z):s_a=\pm1\}
+$$
+acting on Pauli labels by $\sigma^a\mapsto s_a\sigma^a$. The aforementioned proper $\pi$-rotations are the determinant +1 subgroup of this larger group. Hence the sign symmetries set a moment to zero whenever its normal form is odd under at least one $F_a$. In particular, a nonzero normal-form moment must have
+$$
+    N_X = N_Y = N_Z = 0 \pmod 2.
+$$
+
+This larger $C_2^3$ is useful for eliminating moment variables, but it does not produce eight independent PSD blocks. A PSD entry contains a product $\mathcal{O}_a^\dag \mathcal{O}_b$. It can be nonzero only if this product is even under all three flips. Therefore two basis operators can couple whenever their parity labels are equal up to the common flip 111:
+$$
+    p(\mathcal{O}_a) = p(\mathcal{O}_b)
+    \quad\text{or}\quad
+    p(\mathcal{O}_a) = p(\mathcal{O}_b) + 111.
+$$
+For instance,
+$$
+    \underbrace{(X_i)}_{100} \underbrace{(Y_iZ_j)}_{011} = \underbrace{iZ_iZ_j}_{000},
+$$
+so the sectors $100$ and $011$ are connected rather than separated. Thus the eight raw $C_2^3$ labels pair into exactly four PSD blocks,
+$$
+    000/111:(+,+),\quad
+    100/011:(-,+),\quad
+    010/101:(-,-),\quad
+    001/110:(+,-).
+$$
+In the brackets, we label the $C_2\times C_2$ charge by the two independent $\pi$-rotation signs
+$$
+    (q_{xy}, q_{yz}) = \left((-1)^{N_X+N_Y},(-1)^{N_Y+N_Z}\right).
+$$
+In short, the $C_2\times C_2$ quotient gives the PSD block labels, while the full $C_2^3$ sign symmetry gives additional zero-moment rules.
+
+#### *7.3. Permutation*
+For every permutation $\tau\in S_3$ of the spin labels $x,y,z$,
+$$
+    \langle \mathcal{O}\rangle = \left\langle \tau(\mathcal{O})\right\rangle.
+$$
+Bare $S_3$ permutations are not literally a subgroup of $SO(3)$: odd permutations have determinant -1.
+
+#### *7.4. Other positivity constraints (not implemented)*
+The SDP bound shall be improved by adding an extra positivity constraint on a local $k$-body reduced density matrix,
+$$
+    \rho_{[k]}
+    =\frac{1}{2^k}\sum_{a_1,\ldots,a_k}
+    \left\langle \sigma_1^{a_1}\sigma_2^{a_2}\cdots\sigma_k^{a_k}\right\rangle
+    \sigma_1^{a_1}\sigma_2^{a_2}\cdots\sigma_k^{a_k}
+    \succeq 0,
+$$
+where $a_i\in\{0,x,y,z\}$ and $\sigma_i^0=\mathbf 1$. The cost is that $\rho_{[k]}$ is a $2^k\times 2^k$ PSD matrix. And this is only useful if the $k$-site local algebra is not already contained in the moment-matrix basis. In our NGA setting, the active basis is grown from Hamiltonian descendants and need not contain all moments appearing in $\rho_{[k]}$; adding this constraint would therefore require adding those local RDM moments as required variables, or treating it as a separate fixed-basis enhancement.
+
+Refs:
+* https://arxiv.org/pdf/2310.05844, main benchmark on Heisenberg chain.
+
+    > For $J_2\leq J_1$, they use sparse monomials of the schematic form
+    > $$
+    >     1,
+    >     \quad \sigma_i^a,
+    >     \quad \sigma_i^a\sigma_{i+j}^b,
+    >     \quad \sigma_i^a\sigma_{i+1}^b\sigma_{i+2}^c,
+    >     \quad \sigma_i^a\sigma_{i+1}^b\sigma_{i+2}^c\sigma_{i+3}^d,
+    > $$
+    > where $j$ is restricted to a finite range and $a,b,c,d\in\{x,y,z\}$. For $J_2>J_1$, they adapt the three-body sector to the next-nearest-neighbor structure, using monomials such as
+    > $$
+    >     \sigma_i^a\sigma_{i+2}^b\sigma_{i+4}^c.
+    > $$
+    > This sparse basis is more targeted than a full degree-truncated Pauli basis.
