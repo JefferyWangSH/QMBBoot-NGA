@@ -230,11 +230,12 @@ class NGARunner:
         cand_reps = {}
         null_eigvals = []
 
-        for n, (block_reprs, eigvals, eigvecs) in enumerate(zip(
+        for n, block_reprs, eigvals, eigvecs in zip(
+            self.compiler.block_momenta,
             self.compiler.block_reprs,
             self.psd_eigvals,
             self.psd_eigvecs,
-        )):
+        ):
             null_mask = (0 <= eigvals) & (eigvals <= self.nga_params.grow_null_tol)
             if np.count_nonzero(null_mask) == 0:
                 continue

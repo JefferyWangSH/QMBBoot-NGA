@@ -60,7 +60,7 @@ class HeisenbergCompiler:
 
     # we divide PSD blocks through both translation and spin-rotation of pi angle
     block_reprs: list[list[PauliString]]
-    block_map: dict[int, tuple[int, tuple[int, int]]]
+    block_momenta: list[int]
     psd_blocks: list[PSDConstraints]
 
     affines: AffineConstraints
@@ -183,7 +183,7 @@ class HeisenbergCompiler:
 
     def _build_block_reprs(self):
         self.block_reprs = []
-        self.block_map = {}
+        self.block_momenta = []
 
         for n in range(self.L//2 + 1): # K symmetry
             charge_reprs = {}
@@ -194,15 +194,13 @@ class HeisenbergCompiler:
                 charge_reprs.setdefault(charge, []).append(pstr)
 
             for charge in sorted(charge_reprs):
-                idx = len(self.block_reprs)
                 self.block_reprs.append(charge_reprs[charge])
-                self.block_map[idx] = (n, charge)
+                self.block_momenta.append(n)
 
     def _build_psd(self):
         self.psd_blocks = []
 
-        for block_idx, block_basis in enumerate(self.block_reprs):
-            n, _ = self.block_map[block_idx]
+        for n, block_basis in zip(self.block_momenta, self.block_reprs):
             k = 2*np.pi * n / self.L
             psd = PSDConstraints(n_vars=len(self.vars), dim=len(block_basis))
 

@@ -69,6 +69,7 @@ class HubbardCompiler:
 
     basis_reprs: list[MajoranaMonomial]
     block_reprs: list[list[MajoranaMonomial]]
+    block_momenta: list[int]
 
     # moment variables are real expectations of
     # hermitianized Majorana monomials with even fermion parity
@@ -192,11 +193,13 @@ class HubbardCompiler:
             allowed momentum satisfy e^{-i k L_a} = s where s is the period_sign
         '''
         self.block_reprs = []
+        self.block_momenta = []
         for n in range(self.L//2 + 1):
             self.block_reprs.append([
                 monomial for monomial in self.basis_reprs
                 if self.nonzero_fourier(monomial, n)
             ])
+            self.block_momenta.append(n)
 
     def _build_psd(self):
         '''
@@ -205,7 +208,7 @@ class HubbardCompiler:
         self.psd_blocks = []
 
         # K symmetry equals M(k) \succcurlyeq 0 and M(-k) \succcurlyeq 0
-        for n, block_basis in enumerate(self.block_reprs):
+        for n, block_basis in zip(self.block_momenta, self.block_reprs):
             k = 2*np.pi * n / self.L
             psd = PSDConstraints(n_vars=len(self.vars), dim=len(block_basis))
 

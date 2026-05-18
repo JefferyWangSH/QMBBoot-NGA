@@ -60,15 +60,16 @@ class IsingCompiler:
             2) relating M(k) and M(-k),
             3) and reducing stationarity constraint generators.
 
-        var_cpx:      False
-        vars:         K-even moment Pauli strings as SDP variables
-        var_index:    map between canonical PauliString indices and variable indices
-        ward_moments: K-odd moment Pauli strings for generating Ward identities
-        ward_index:   map between canonical PauliString indices and Ward moment indices
-        block_reprs:  representative basis involved in each momentum PSD block
-        psd_blocks:   momentum PSD blocks
-        affines:      affine constraints
-        affines_mat:  affine constraints in terms of a sparse matrix
+        var_cpx:       False
+        vars:          K-even moment Pauli strings as SDP variables
+        var_index:     map between canonical PauliString indices and variable indices
+        ward_moments:  K-odd moment Pauli strings for generating Ward identities
+        ward_index:    map between canonical PauliString indices and Ward moment indices
+        block_reprs:   representative basis involved in each momentum PSD block
+        block_momenta: momentum index to which each PSD block corresponds
+        psd_blocks:    momentum PSD blocks
+        affines:       affine constraints
+        affines_mat:   affine constraints in terms of a sparse matrix
     '''
     var_cpx: bool = False
     var_index: dict[int, int]
@@ -78,6 +79,7 @@ class IsingCompiler:
     ward_moments: list[PauliString]
 
     block_reprs: list[list[PauliString]]
+    block_momenta: list[int]
     psd_blocks: list[PSDConstraints]
 
     affines: AffineConstraints
@@ -139,11 +141,13 @@ class IsingCompiler:
             allowed momentum satisfy e^{-i k L_a} = 1 such that n L_a/L = m
         '''
         self.block_reprs = []
+        self.block_momenta = []
         for n in range(self.L//2 + 1):
             self.block_reprs.append([
                 pstr for pstr in self.basis_reprs
                 if self.nonzero_fourier(pstr, n)
             ])
+            self.block_momenta.append(n)
 
     def _build_psd(self):
         '''
@@ -155,7 +159,7 @@ class IsingCompiler:
             K symmetry imposes that M(-k) = diag(eta) M(k)^\ast diag(eta)
             therefore the number of independent momentum PSD blocks can be reduced by half
         '''
-        for n, block_basis in enumerate(self.block_reprs):
+        for n, block_basis in zip(self.block_momenta, self.block_reprs):
             k = 2*np.pi * n / self.L
             psd = PSDConstraints(n_vars=len(self.vars), dim=len(block_basis))
 
