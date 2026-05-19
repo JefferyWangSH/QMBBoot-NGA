@@ -31,15 +31,6 @@ def build_hamil(params: HeisenbergParams):
     return hamil_op
 
 
-def build_spin(params: HeisenbergParams, pauli: str):
-    assert pauli in 'XYZ'
-    spin_op = PauliOperator()
-    local = PauliString.from_str(pauli + 'I'*(params.L-1))
-    for shift in range(params.L):
-        spin_op.add(local.translate(shift), .5)
-    return spin_op
-
-
 class HeisenbergCompiler:
     L: int
     params: HeisenbergParams
@@ -68,13 +59,11 @@ class HeisenbergCompiler:
 
     hamil_op: PauliOperator
     hamil_expr: LinearExpr
-    spin_ops: tuple[PauliOperator, PauliOperator, PauliOperator]
 
     def __init__(self, params: HeisenbergParams):
         self.L = params.L
         self.params = params
         self.hamil_op = build_hamil(params)
-        self.spin_ops = tuple(build_spin(params, pauli) for pauli in 'XYZ')
         self._moment_flags_cache = {}
         self._sym_canon_cache = {}
 
@@ -222,6 +211,34 @@ class HeisenbergCompiler:
 
             self.psd_blocks.append(psd)
 
+    def _total_spin_comm(self, pstr: PauliString, axis_code: int) -> PauliOperator:
+        '''
+            return [S^a_tot, O] as a Pauli operator
+            axis_code: X=1=01, Z=2=10, Y=3=11
+        '''
+        X, Y, Z = 1, 3, 2
+        coeffs = {
+            (X, Y): 1j,  # [Sx, Y] =  i Z
+            (Y, Z): 1j,  # [Sy, Z] =  i X
+            (Z, X): 1j,  # [Sz, X] =  i Y
+            (X, Z): -1j, # [Sx, Z] = -i Y
+            (Z, Y): -1j, # [Sz, Y] = -i X
+            (Y, X): -1j, # [Sy, X] = -i Z
+        }
+        op = PauliOperator()
+        support = pstr.mask
+        while support:
+            bit = support & -support
+            site = (bit.bit_length() - 1) // 2
+            old_code = (pstr.mask >> (2*site)) & 3
+            support &= ~(3 << (2*site))
+            if old_code == axis_code:
+                continue
+
+            new_mask = (pstr.mask & ~(3 << (2*site))) | ((axis_code ^ old_code) << (2*site))
+            op.add(PauliString(self.L, new_mask), coeffs[(axis_code, old_code)])
+        return op
+
     def _build_affines(self):
         self.affines = AffineConstraints(n_vars=len(self.vars))
 
@@ -230,11 +247,10 @@ class HeisenbergCompiler:
             raise ValueError('current basis cannot represent the identity operator')
         self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
 
-        generators = self.spin_ops
-        for generator in generators:
+        # SO(3) Ward identities
+        for axis_code in (1, 3, 2): # X, Y, Z
             for pstr in self.ward_moments:
-                comm_op = generator.commutator(PauliOperator({pstr: 1}))
-                expr = self._compile_expr(comm_op)
+                expr = self._compile_expr(self._total_spin_comm(pstr, axis_code))
                 if expr is None:
                     continue
                 self.affines.add(expr)

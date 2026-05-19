@@ -17,6 +17,7 @@ class ModelAdapter:
     start_step: int
     records: list
     events: dict
+    drop_counts: dict
 
     @classmethod
     def load(cls, config: Path, resume: Path | None = None):
@@ -65,6 +66,10 @@ class ModelAdapter:
             start_step = state.get('step', -1) + 1
             records = state.get('records', [])
             events = json.loads(resume_events.read_text()) if resume_events.exists() else {'steps': []}
+            drop_counts = {}
+            for step_event in events.get('steps', []):
+                for rep in parse_basis(step_event.get('drop', [])):
+                    drop_counts[rep.canon] = drop_counts.get(rep.canon, 0) + 1
         else:
             basis = initial_basis(basis_config['initial'])
             start_step, records = 0, []
@@ -72,8 +77,9 @@ class ModelAdapter:
                 'initial_basis': [str(rep.canon_rep) for rep in basis],
                 'steps': [],
             }
+            drop_counts = {}
 
-        return cls(model_type, model_params, compiler, nga_params, basis, required_basis, start_step, records, events)
+        return cls(model_type, model_params, compiler, nga_params, basis, required_basis, start_step, records, events, drop_counts)
 
     def get_basis_rep(self, key):
         return type(self.basis[0])(self.model_params.L, key).canon_rep
@@ -99,6 +105,7 @@ if __name__ == '__main__':
         required_basis_reprs=adapter.required_basis,
         nga_params=adapter.nga_params,
     )
+    runner.drop_counts = adapter.drop_counts
 
     start_step = adapter.start_step
     events = adapter.events

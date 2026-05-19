@@ -20,6 +20,7 @@ class NGAParams:
     # max(drop_cap_base_per_step, drop_cap_rate * len(basis_reprs))
     drop_cap_base_per_step: int = 8
     drop_cap_rate: float = 0.1
+    reentry_penalty: float = 0.0
 
     def to_dict(self):
         return {
@@ -32,6 +33,7 @@ class NGAParams:
             'max_net_growth_per_step': self.max_net_growth_per_step,
             'drop_cap_base_per_step': self.drop_cap_base_per_step,
             'drop_cap_rate': self.drop_cap_rate,
+            'reentry_penalty': self.reentry_penalty,
         }
 
 @dataclass(slots=True)
@@ -116,6 +118,7 @@ class NGARunner:
         # small indices have higher priority
         self.to_drop = []
         self.to_grow = []
+        self.drop_counts = {}
 
     def _reset_record(self):
         nga_params_record = self.nga_params.to_dict()
@@ -164,7 +167,7 @@ class NGARunner:
             self.psd_eigvals,
             self.psd_eigvecs,
         ):
-            null_mask = (0 <= eigvals) & (eigvals <= self.nga_params.drop_null_tol)
+            null_mask = np.abs(eigvals) <= self.nga_params.drop_null_tol
             if np.count_nonzero(null_mask) == 0:
                 continue
 
@@ -236,7 +239,7 @@ class NGARunner:
             self.psd_eigvals,
             self.psd_eigvecs,
         ):
-            null_mask = (0 <= eigvals) & (eigvals <= self.nga_params.grow_null_tol)
+            null_mask = np.abs(eigvals) <= self.nga_params.grow_null_tol
             if np.count_nonzero(null_mask) == 0:
                 continue
 
@@ -295,6 +298,11 @@ class NGARunner:
         self.record.grow_null_count = len(null_eigvals)
         self.record.max_grow_null_eigval = float(np.max(null_eigvals)) if null_eigvals else None
 
+        if self.nga_params.reentry_penalty > 0:
+            for key, count in self.drop_counts.items():
+                if key in cand_scores:
+                    cand_scores[key] *= (1 - self.nga_params.reentry_penalty) ** count
+
         cands = sorted(cand_scores, key=lambda key: (-cand_scores[key], key))
         self.to_grow = [cand_reps[key] for key in cands[:target_growth]]
         return self.to_grow
@@ -308,6 +316,8 @@ class NGARunner:
             self.to_drop.pop()
 
         to_drop_set = set(self.to_drop)
+        for key in to_drop_set:
+            self.drop_counts[key] = self.drop_counts.get(key, 0) + 1
         self.basis_reprs = [rep for rep in self.basis_reprs if rep.canon not in to_drop_set]
         self.basis_reprs.extend(self.to_grow)
         self.basis_indices = {rep.canon: idx for idx, rep in enumerate(self.basis_reprs)}
