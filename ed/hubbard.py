@@ -78,7 +78,7 @@ def hamil(L: int, t: float = 1., U: float = 4., n_particles: int | None = None):
     dim = len(basis)
     return sparse.csr_matrix((vals, (rows, cols)), shape=(dim, dim), dtype=float)
 
-def gs(L: int, t: float = 1., U: float = 4., n_particles: int | None = None, tol=1e-10, vec=False):
+def gs(L: int, t: float = 1., U: float = 4., n_particles: int | None = None, tol=1e-12, vec=False):
     H = hamil(L, t=t, U=U, n_particles=n_particles)
     if vec:
         vals, vecs = eigsh(H, k=1, which='SA', tol=tol)

@@ -113,7 +113,6 @@ if __name__ == '__main__':
 
     t0 = time.perf_counter()
     for step in range(start_step, start_step + args.steps):
-        s0 = time.perf_counter()
         _, record = runner.step()
 
         events['steps'].append({
@@ -143,10 +142,21 @@ if __name__ == '__main__':
         )
 
         print(
-            f'[{step:03d}] {record["status"]} value={record["value"]:.12f} | '
-            f'basis={record["basis_reps"]} vars={record["n_vars"]} aff_rank={record["affine_rank"]} psd_dims={sum(record["psd_dims"])} | '
-            f'drop_null={record["drop_null_count"]} grow_null={record["grow_null_count"]} | '
-            f'to_drop={record["to_drop"]} to_grow={record["to_grow"]} net={record["net_growth"]} | '
-            f'step_s={time.perf_counter()-s0:.1f} elapsed_s={time.perf_counter()-t0:.1f}',
+            f'[{step:03d}] '
+            f'{record["status"]} '
+            f'value={record["value"]:.12f} | '
+            f'basis={record["basis_reps"]} '
+            f'vars={record["n_vars"]} '
+            f'aff_rank={record["affine_rank"]} '
+            f'psd_dims={sum(record["psd_dims"])} | '
+            f'drop_null={record["drop_null_count"]} '
+            f'grow_null={record["grow_null_count"]} | '
+            f'to_drop={record["to_drop"]} '
+            f'to_grow={record["to_grow"]} '
+            f'net={record["net_growth"]} | '
+            f'compile_s={record["time"]["compile_time"]:.1f} '
+            f'build_s={record["time"]["build_time"]:.1f} '
+            f'solve_s={record["time"]["solve_time"]:.1f} | '
+            f'elapsed_s={time.perf_counter()-t0:.1f}',
             flush=True,
         )

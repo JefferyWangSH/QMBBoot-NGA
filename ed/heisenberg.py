@@ -41,7 +41,7 @@ def hamil(L, J1=1., J2=0.):
     return H / L
 
 
-def gs(L, J1=1., J2=0., tol=1e-10, vec=False):
+def gs(L, J1=1., J2=0., tol=1e-12, vec=False):
     H = hamil(L, J1=J1, J2=J2)
     if vec:
         vals, vecs = eigsh(H, k=1, which='SA', tol=tol)

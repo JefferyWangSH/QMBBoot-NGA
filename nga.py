@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field, fields
 from functools import cache
 import math
+import time
 
 import numpy as np
 import scipy as sp
@@ -51,6 +52,11 @@ class NGARecord:
     to_drop: int | None = None
     to_grow: int | None = None
     net_growth: int | None = None
+    time: dict = field(default_factory=lambda: {
+        'compile_time': None,
+        'build_time': None,
+        'solve_time': None,
+    })
     nga_params: dict | None = None
 
     def to_dict(self):
@@ -131,18 +137,26 @@ class NGARunner:
         )
 
     def build(self):
+        start = time.perf_counter()
         self.compiler.compile(self.basis_reprs)
+        self.record.time['compile_time'] = time.perf_counter() - start
+
+        start = time.perf_counter()
         self.solver.build(self.compiler.sdp_data())
+        self.record.time['build_time'] = time.perf_counter() - start
+
         summary = self.compiler.summary()
         self.record.psd_dims = summary['psd_dims']
         self.record.n_vars = summary['vars']
         self.record.affine_rank = summary['affines_rank']
 
     def solve(self):
+        start = time.perf_counter()
         value = self.solver.solve(
             backend=self.nga_params.solver_backend,
             **self.nga_params.solver_kwargs,
         )
+        self.record.time['solve_time'] = time.perf_counter() - start
         self.record.value = value
         self.record.status = self.solver.status
 

@@ -40,7 +40,7 @@ def hamil(L, J=1., h=1., hz=0.):
 
     return H / L
 
-def gs(L, J=1., h=1., hz=0., tol=1e-10, vec=False):
+def gs(L, J=1., h=1., hz=0., tol=1e-12, vec=False):
     H = hamil(L, J=J, h=h, hz=hz)
     if vec:
         vals, vecs = eigsh(H, k=1, which='SA', tol=tol)
