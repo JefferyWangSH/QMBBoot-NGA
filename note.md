@@ -419,6 +419,10 @@ After each solve, the primal nullspace and the dual SOS certificate propose appr
 
 From the dual viewpoint, the same loop is also an iterative search for a better SOS certificate. When the basis is sufficiently strong, one hopes that the surviving stable $\mathcal{P}_a$ yield the true physical annihilators of the ground state. However, $\mathcal{P}_a^\dag$ is not automatically a strict excitation creation operator as $\mathcal{P}_a^\dag|\psi_0\rangle$ may not be an energy eigenstate. Therefore $\mathcal{P}_a^\dag$ should be viewed as an excitation-channel candidate, not automatically as a strict quasiparticle operator. In other words, the SOS certificate supplies candidate null relations, while the excitation problem lives on the remaining support.
 
+Refs:
+* https://docs.mosek.com/modeling-cookbook/duality.html
+* https://docs.mosek.com/modeling-cookbook/sdo.html
+
 ### *4. NGA implementation*
 The raw basis is a list of translation representatives,
 $$

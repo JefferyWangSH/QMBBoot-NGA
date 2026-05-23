@@ -230,7 +230,7 @@ class IsingCompiler:
         
         self._build_affines()
 
-    def local_comm(self, pstr: PauliString):
+    def descendants(self, pstr: PauliString):
         r'''
             calculate
 
@@ -239,9 +239,9 @@ class IsingCompiler:
             as entry list [(O'(0)_b, s, C_{ab}(s)), ...]
         '''
         entries = {}
-        local_comm = self.hamil_op.commutator(PauliOperator({pstr: 1}))
+        comm = self.hamil_op.commutator(PauliOperator({pstr: 1}))
 
-        for desc, coeff in local_comm.terms.items():
+        for desc, coeff in comm.terms.items():
             desc_rep = desc.canon_rep
             s = 0
             for shift in range(desc.L):

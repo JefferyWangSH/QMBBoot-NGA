@@ -16,12 +16,15 @@ class NGAParams:
     grow_null_tol: float = 1e-9
     max_drop_leverage: float = 1e-2
     min_net_growth_per_step: int = 1
-    max_net_growth_per_step: int = 8
+    # max net basis growth per step given by
+    # max(net_growth_cap_base_per_step, net_growth_cap_rate * len(basis_reprs))
+    net_growth_cap_base_per_step: int = 4
+    net_growth_cap_rate: float = 0.1
     # max number of basis drop per step given by
     # max(drop_cap_base_per_step, drop_cap_rate * len(basis_reprs))
-    drop_cap_base_per_step: int = 8
+    drop_cap_base_per_step: int = 1
     drop_cap_rate: float = 0.1
-    reentry_penalty: float = 0.0
+    reentry_penalty: float = 0.5
 
     def to_dict(self):
         return {
@@ -31,7 +34,8 @@ class NGAParams:
             'grow_null_tol': self.grow_null_tol,
             'max_drop_leverage': self.max_drop_leverage,
             'min_net_growth_per_step': self.min_net_growth_per_step,
-            'max_net_growth_per_step': self.max_net_growth_per_step,
+            'net_growth_cap_base_per_step': self.net_growth_cap_base_per_step,
+            'net_growth_cap_rate': self.net_growth_cap_rate,
             'drop_cap_base_per_step': self.drop_cap_base_per_step,
             'drop_cap_rate': self.drop_cap_rate,
             'reentry_penalty': self.reentry_penalty,
@@ -84,7 +88,7 @@ class NGARunner:
             Compiler.compile(basis_reprs: list[BasisRep]) -> None
             Compiler.sdp_data() -> SDPData
             Compiler.summary() -> dict
-            Compiler.local_comm(rep: BasisRep) -> list[tuple[BasisRep, int, complex]]
+            Compiler.descendants(rep: BasisRep) -> list[tuple[BasisRep, int, complex]]
             Compiler.nonzero_fourier(rep: BasisRep, block_idx: int) -> bool
     '''
     def __init__(
@@ -228,19 +232,23 @@ class NGARunner:
         return self.to_drop
 
     @cache
-    def _local_comm(self, rep):
+    def _descendants(self, rep):
         r'''
             calculate C_a = [H, O_a(0)] = \sum_{b,s} C_{ab}(s) T_s O'(0)_b
             as entry list [(O'(0)_b, s, C_{ab}(s)), ...]
         '''
-        return self.compiler.local_comm(rep)
+        return self.compiler.descendants(rep)
 
     def proposed_grow(self):
         if not self.psd_eigvals or not self.psd_eigvecs:
             raise ValueError('diagonalize psd blocks first')
 
         basis_keys = set(self.basis_indices)
-        target_growth = len(self.to_drop) + self.nga_params.max_net_growth_per_step
+        net_growth_cap = max(
+            self.nga_params.net_growth_cap_base_per_step,
+            math.ceil(self.nga_params.net_growth_cap_rate * len(self.basis_reprs)),
+        )
+        target_growth = len(self.to_drop) + net_growth_cap
         self.to_grow = []
 
         cand_scores = {}
@@ -277,7 +285,7 @@ class NGARunner:
 
             # sparse descendant matrix D_{ba}(k) = \sum_s C_{ab}(s) e^{iks}
             for a_idx, rep in enumerate(block_reprs):
-                for desc_rep, s, coeff in self._local_comm(rep):
+                for desc_rep, s, coeff in self._descendants(rep):
                     desc_key = desc_rep.canon
                     if desc_key in basis_keys:
                         continue
@@ -371,7 +379,8 @@ if __name__ == '__main__':
             grow_null_tol=1e-8,
             max_drop_leverage=5e-2,
             min_net_growth_per_step=1,
-            max_net_growth_per_step=8,
+            net_growth_cap_base_per_step=8,
+            net_growth_cap_rate=0.0,
             drop_cap_base_per_step=8,
             drop_cap_rate=0.1,
         ),

@@ -41,8 +41,8 @@ class HeisenbergCompiler:
     var_index: dict[int, int]
     vars: list[PauliString]
 
-    ward_index: dict[int, int]
-    ward_moments: list[PauliString]
+    ward_index: dict[str, dict[int, int]]
+    ward_moments: dict[str, list[PauliString]]
 
     _moment_var = 1 << 0
     _moment_ward = 1 << 1
@@ -67,33 +67,6 @@ class HeisenbergCompiler:
         self._moment_flags_cache = {}
         self._sym_canon_cache = {}
 
-    @staticmethod
-    def _charge_sign(pstr: PauliString):
-        '''
-            sign-symmetry charge
-        '''
-        charge = [0, 0, 0]
-        for i in range(pstr.L):
-            code = (pstr.mask >> (2*i)) & 3
-            if code == 1:
-                charge[0] ^= 1
-            elif code == 3:
-                charge[1] ^= 1
-            elif code == 2:
-                charge[2] ^= 1
-        return tuple(charge)
-
-    @classmethod
-    def _charge_pi_rot(cls, pstr: PauliString):
-        '''
-            pi spin-rotation charge, map to sign-symmetry charge as
-
-                ++: 000/111, +-: 001/110,
-                -+: 100/011, --: 010/101
-        '''
-        nx, ny, nz = cls._charge_sign(pstr)
-        return ((nx + ny) & 1, (ny + nz) & 1)
-
     def _flag(self, pstr: PauliString):
         if pstr.mask in self._moment_flags_cache:
             return self._moment_flags_cache[pstr.mask]
@@ -101,17 +74,24 @@ class HeisenbergCompiler:
         '''
             1) vars must have sign charge 000, which is definitely also K-even.
 
-            2) because O can not be simultaneously K-odd and sign-symmetry-invariant (000),
-               <[H,O]> = 0 can not generate non-trivial constraints.
+            2) [H,O] preserves pi-rotation charge, therefore to generate non-trivial stationarity constraints
+               O must have pi-rotation charge ++, i.e. sign charge 000/111.
+               Among them, only 111 sector is K-odd and gives K-even commutators.
 
-            3) non-trivial Ward constraints come from commutations with SO(3) charges S^a_{tot} (100, 010 and 001),
+            3) non-trivial SO(3) Ward constraints come from commutations with charges S^a_{tot} (100, 010 and 001),
                hence ward moments must have sign charges 011, 101, or 110.
+
+            In summary,
+
+                000:         SDP variables
+                111:         Hamiltonian Ward operators
+                011/101/110: SO(3) Ward operators
         '''
-        charge = self._charge_sign(pstr)
+        charge = pstr.sign_charge()
         flag = 0
         if charge == (0, 0, 0):
             flag |= self._moment_var
-        elif charge in ((0, 1, 1), (1, 0, 1), (1, 1, 0)):
+        elif charge in ((1, 1, 1), (0, 1, 1), (1, 0, 1), (1, 1, 0)):
             flag |= self._moment_ward
 
         self._moment_flags_cache[pstr.mask] = flag
@@ -121,32 +101,26 @@ class HeisenbergCompiler:
         return bool(self._flag(pstr) & self._moment_var) # 000
 
     def _is_ward(self, pstr: PauliString):
-        return bool(self._flag(pstr) & self._moment_ward) # 011/101/110
+        return bool(self._flag(pstr) & self._moment_ward) # 111/011/101/110
 
     def _is_zero(self, pstr: PauliString):
         return not self._is_var(pstr) # not 000
-
-    @staticmethod
-    def _permute(pstr: PauliString, perm: tuple[str, str, str]):
-        table = str.maketrans({'X': perm[0], 'Y': perm[1], 'Z': perm[2]})
-        return PauliString.from_str(str(pstr).translate(table))
 
     def _sym_canon(self, pstr: PauliString):
         if pstr.mask in self._sym_canon_cache:
             return self._sym_canon_cache[pstr.mask]
 
-        key = min(
-            self._permute(pstr, perm).canon
-            for perm in itertools.permutations('XYZ')
-        )
-        self._sym_canon_cache[pstr.mask] = key
+        orbit = [pstr.permute(perm) for perm in itertools.permutations('XYZ')]
+        key = min(rep.canon for rep in orbit)
+        for rep in orbit:
+            self._sym_canon_cache[rep.mask] = key
         return key
 
     def _build_moments(self):
         self.vars = []
         self.var_index = {}
-        self.ward_moments = []
-        self.ward_index = {}
+        self.ward_moments = {'hamil': [], 'spin': []}
+        self.ward_index = {'hamil': {}, 'spin': {}}
 
         for pstr1 in self.basis_reprs:
             for r in range(pstr1.period):
@@ -161,10 +135,12 @@ class HeisenbergCompiler:
                             self.vars.append(PauliString(self.L, key))
 
                     if self._is_ward(pstr):
+                        charge = pstr.sign_charge()
+                        kind = 'hamil' if charge == (1, 1, 1) else 'spin'
                         key = pstr.canon
-                        if key not in self.ward_index:
-                            self.ward_index[key] = len(self.ward_moments)
-                            self.ward_moments.append(PauliString(self.L, key))
+                        if key not in self.ward_index[kind]:
+                            self.ward_index[kind][key] = len(self.ward_moments[kind])
+                            self.ward_moments[kind].append(PauliString(self.L, key))
 
     @staticmethod
     def nonzero_fourier(pstr: PauliString, n: int) -> bool:
@@ -179,7 +155,7 @@ class HeisenbergCompiler:
             for pstr in self.basis_reprs:
                 if not self.nonzero_fourier(pstr, n):
                     continue
-                charge = self._charge_pi_rot(pstr)
+                charge = pstr.pi_rot_charge()
                 charge_reprs.setdefault(charge, []).append(pstr)
 
             for charge in sorted(charge_reprs):
@@ -239,6 +215,47 @@ class HeisenbergCompiler:
             op.add(PauliString(self.L, new_mask), coeffs[(axis_code, old_code)])
         return op
 
+    def _hamil_comm(self, pstr: PauliString) -> PauliOperator:
+        if not hasattr(self, '_hamil_terms_by_site'):
+            self._hamil_terms_by_site = [[] for _ in range(self.L)]
+            for hstr, hcoeff in self.hamil_op.terms.items():
+                support = hstr.mask
+                while support:
+                    bit = support & -support
+                    site = (bit.bit_length() - 1) // 2
+                    support &= ~(3 << (2*site))
+                    self._hamil_terms_by_site[site].append((hstr, hcoeff))
+
+        op = PauliOperator()
+        seen = set()
+        support = pstr.mask
+        while support:
+            bit = support & -support
+            site = (bit.bit_length() - 1) // 2
+            support &= ~(3 << (2*site))
+
+            for hstr, hcoeff in self._hamil_terms_by_site[site]:
+                if hstr.mask in seen:
+                    continue
+                seen.add(hstr.mask)
+
+                anticomm = 0
+                h_support = hstr.mask
+                while h_support:
+                    h_bit = h_support & -h_support
+                    h_site = (h_bit.bit_length() - 1) // 2
+                    h_support &= ~(3 << (2*h_site))
+
+                    h_code = (hstr.mask >> (2*h_site)) & 3
+                    p_code = (pstr.mask >> (2*h_site)) & 3
+                    if p_code != 0 and p_code != h_code:
+                        anticomm ^= 1
+
+                if anticomm:
+                    prod, phase = hstr.mul(pstr)
+                    op.add(prod, 2 * hcoeff * phase)
+        return op
+
     def _build_affines(self):
         self.affines = AffineConstraints(n_vars=len(self.vars))
 
@@ -247,9 +264,16 @@ class HeisenbergCompiler:
             raise ValueError('current basis cannot represent the identity operator')
         self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
 
+        # stationarity constraints
+        for pstr in self.ward_moments['hamil']:
+            expr = self._compile_expr(self._hamil_comm(pstr))
+            if expr is None:
+                continue
+            self.affines.add(expr)
+
         # SO(3) Ward identities
         for axis_code in (1, 3, 2): # X, Y, Z
-            for pstr in self.ward_moments:
+            for pstr in self.ward_moments['spin']:
                 expr = self._compile_expr(self._total_spin_comm(pstr, axis_code))
                 if expr is None:
                     continue
@@ -272,8 +296,6 @@ class HeisenbergCompiler:
         return LinearExpr(terms=expr, const=0)
 
     def compile(self, basis_reprs: list[PauliString]):
-        self._moment_flags_cache = {}
-
         self.basis_reprs = list(basis_reprs)
         for pstr in self.basis_reprs:
             if pstr.L != self.L:
@@ -289,11 +311,11 @@ class HeisenbergCompiler:
 
         self._build_affines()
 
-    def local_comm(self, pstr: PauliString):
+    def descendants(self, pstr: PauliString):
         entries = {}
-        local_comm = self.hamil_op.commutator(PauliOperator({pstr: 1}))
+        comm = self._hamil_comm(pstr)
 
-        for desc, coeff in local_comm.terms.items():
+        for desc, coeff in comm.terms.items():
             desc_rep = desc.canon_rep
             s = 0
             for shift in range(desc.L):
@@ -325,7 +347,7 @@ class HeisenbergCompiler:
             'params': self.params,
             'basis_reprs': len(self.basis_reprs),
             'vars': len(self.vars),
-            'ward_moments': len(self.ward_moments),
+            'ward_moments': {kind: len(moments) for kind, moments in self.ward_moments.items()},
             'psd_blocks': len(self.psd_blocks),
             'psd_dims_sum': sum(psd.dim for psd in self.psd_blocks),
             'psd_dims': [psd.dim for psd in self.psd_blocks],

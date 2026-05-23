@@ -296,23 +296,21 @@ class HubbardCompiler:
         return LinearExpr(terms=expr, const=0)
 
     def compile(self, basis_reprs: list[MajoranaMonomial]):
-        self._moment_flags_cache = {}
-
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ build moments and PSD blocks
+        # build moments and PSD blocks
         self.basis_reprs = basis_reprs
         self._build_moments()
         self._build_block_reprs()
         self._build_psd()
 
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ build hamiltonian
+        # build hamiltonian
         self.hamil_expr = self._compile_expr(self.hamil_op)
         if self.hamil_expr is None:
             raise ValueError('current basis cannot represent the Hamiltonian')
 
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ build affine constraints
+        # build affine constraints
         self._build_affines()
 
-    def local_comm(self, monomial: MajoranaMonomial):
+    def descendants(self, monomial: MajoranaMonomial):
         r'''
             calculate
 
@@ -328,9 +326,9 @@ class HubbardCompiler:
             disjoint terms commute and can be skipped.
         '''
         entries = {}
-        local_comm = self.hamil_op.commutator(MajoranaOperator({monomial: 1}))
+        comm = self.hamil_op.commutator(MajoranaOperator({monomial: 1}))
 
-        for desc, coeff in local_comm.terms.items():
+        for desc, coeff in comm.terms.items():
             desc_rep = desc.canon_rep
             s, s_sign = 0, 1
             for shift in range(desc.L):

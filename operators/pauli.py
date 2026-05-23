@@ -1,5 +1,15 @@
 from functools import cached_property
 
+_PAULI_CODE = {'X': 1, 'Y': 3, 'Z': 2}
+_PAULI_PHASE = (1., 1j, -1., -1j)
+_PAULI_MUL_PHASE_POWER = (
+    (0, 0, 0, 0),
+    (0, 0, 3, 1),
+    (0, 1, 0, 3),
+    (0, 3, 1, 0),
+)
+
+
 class PauliString:
     L: int
     mask: int # 2L-bit, each site uses I=00, X=01, Z=10, Y=11
@@ -25,15 +35,11 @@ class PauliString:
         mask = 0
         for i, pauli in enumerate(pstr):
             if pauli == 'I':
-                code = 0
-            elif pauli == 'X':
-                code = 1
-            elif pauli == 'Z':
-                code = 2
-            elif pauli == 'Y':
-                code = 3
-            else:
-                raise ValueError(f'invalid Pauli operator: {pauli}')
+                continue
+            try:
+                code = _PAULI_CODE[pauli]
+            except KeyError:
+                raise ValueError(f'invalid Pauli operator: {pauli}') from None
             mask |= code << (2*i)
         return cls(L=len(pstr), mask=mask)
 
@@ -68,6 +74,18 @@ class PauliString:
     def translate(self, shift: int):
         return PauliString(self.L, self._rotate_l(self.mask, shift))
 
+    def permute(self, perm: tuple[str, str, str]):
+        code_map = {1: _PAULI_CODE[perm[0]], 3: _PAULI_CODE[perm[1]], 2: _PAULI_CODE[perm[2]]}
+        mask = 0
+        support = self.mask
+        while support:
+            bit = support & -support
+            site = (bit.bit_length() - 1) // 2
+            old_code = (self.mask >> (2*site)) & 3
+            mask |= code_map[old_code] << (2*site)
+            support &= ~(3 << (2*site))
+        return PauliString(self.L, mask)
+
     def __eq__(self, other):
         return self.L == other.L and self.mask == other.mask
 
@@ -87,32 +105,18 @@ class PauliString:
     def mul(self, other) -> tuple["PauliString", float|complex]:
         assert self.L == other.L
         mask = self.mask ^ other.mask
-
-        phase = 1.
         support = self.mask | other.mask
+        phase_power = 0
 
         while support:
             bit = support & -support
             site = (bit.bit_length() - 1) // 2
             a = (self.mask >> (2*site)) & 3
             b = (other.mask >> (2*site)) & 3
-
-            if a == 1 and b == 2:   # XZ = -iY
-                phase *= -1j
-            elif a == 2 and b == 1: # ZX = iY
-                phase *= 1j
-            elif a == 1 and b == 3: # XY = iZ
-                phase *= 1j
-            elif a == 3 and b == 1: # YX = -iZ
-                phase *= -1j
-            elif a == 2 and b == 3: # ZY = -iX
-                phase *= -1j
-            elif a == 3 and b == 2: # YZ = iX
-                phase *= 1j
-
+            phase_power += _PAULI_MUL_PHASE_POWER[a][b]
             support &= ~(3 << (2*site))
 
-        return PauliString(self.L, mask), phase
+        return PauliString(self.L, mask), _PAULI_PHASE[phase_power & 3]
 
     def parity(self):
         # +1 for K even and -1 for K odd
@@ -121,6 +125,35 @@ class PauliString:
             if ((self.mask >> (2*i)) & 3) == 3
         )
         return 1 - 2 * int(y_count % 2)
+
+    def sign_charge(self):
+        '''
+            sign-symmetry charge
+        '''
+        charge = [0, 0, 0]
+        support = self.mask
+        while support:
+            bit = support & -support
+            site = (bit.bit_length() - 1) // 2
+            code = (self.mask >> (2*site)) & 3
+            if code == 1:
+                charge[0] ^= 1
+            elif code == 3:
+                charge[1] ^= 1
+            elif code == 2:
+                charge[2] ^= 1
+            support &= ~(3 << (2*site))
+        return tuple(charge)
+
+    def pi_rot_charge(self):
+        '''
+            pi spin-rotation charge, map to sign-symmetry charge as
+
+                ++: 000/111, +-: 001/110,
+                -+: 100/011, --: 010/101
+        '''
+        nx, ny, nz = self.sign_charge()
+        return ((nx + ny) & 1, (ny + nz) & 1)
 
 
 class PauliOperator:
