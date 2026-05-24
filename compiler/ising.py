@@ -181,6 +181,47 @@ class IsingCompiler:
 
             self.psd_blocks.append(psd)
 
+    def _hamil_comm(self, pstr: PauliString) -> PauliOperator:
+        if not hasattr(self, '_hamil_terms_by_site'):
+            self._hamil_terms_by_site = [[] for _ in range(self.L)]
+            for hstr, hcoeff in self.hamil_op.terms.items():
+                support = hstr.mask
+                while support:
+                    bit = support & -support
+                    site = (bit.bit_length() - 1) // 2
+                    support &= ~(3 << (2*site))
+                    self._hamil_terms_by_site[site].append((hstr, hcoeff))
+
+        op = PauliOperator()
+        seen = set()
+        support = pstr.mask
+        while support:
+            bit = support & -support
+            site = (bit.bit_length() - 1) // 2
+            support &= ~(3 << (2*site))
+
+            for hstr, hcoeff in self._hamil_terms_by_site[site]:
+                if hstr.mask in seen:
+                    continue
+                seen.add(hstr.mask)
+
+                anticomm = 0
+                h_support = hstr.mask
+                while h_support:
+                    h_bit = h_support & -h_support
+                    h_site = (h_bit.bit_length() - 1) // 2
+                    h_support &= ~(3 << (2*h_site))
+
+                    h_code = (hstr.mask >> (2*h_site)) & 3
+                    p_code = (pstr.mask >> (2*h_site)) & 3
+                    if p_code != 0 and p_code != h_code:
+                        anticomm ^= 1
+
+                if anticomm:
+                    prod, phase = hstr.mul(pstr)
+                    op.add(prod, 2 * hcoeff * phase)
+        return op
+
     def _build_affines(self):
         self.affines = AffineConstraints(n_vars=len(self.vars))
 
@@ -191,8 +232,7 @@ class IsingCompiler:
         self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
 
         for pstr in self.ward_moments:
-            comm_op = self.hamil_op.commutator(PauliOperator({pstr: 1}))
-            expr = self._compile_expr(comm_op)
+            expr = self._compile_expr(self._hamil_comm(pstr))
             if expr is None:
                 continue
             self.affines.add(expr)
@@ -239,9 +279,9 @@ class IsingCompiler:
             as entry list [(O'(0)_b, s, C_{ab}(s)), ...]
         '''
         entries = {}
-        comm = self.hamil_op.commutator(PauliOperator({pstr: 1}))
+        comm_op = self._hamil_comm(pstr)
 
-        for desc, coeff in comm.terms.items():
+        for desc, coeff in comm_op.terms.items():
             desc_rep = desc.canon_rep
             s = 0
             for shift in range(desc.L):

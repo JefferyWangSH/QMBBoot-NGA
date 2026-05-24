@@ -3,7 +3,7 @@ import itertools
 import numpy as np
 import scipy as sp
 
-from operators.pauli import PauliString, PauliOperator
+from operators.pauli import PauliString, PauliOperator, _PAULI_CODE, _PAULI_PHASE, _PAULI_MUL_PHASE_POWER
 from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
 
 
@@ -187,34 +187,6 @@ class HeisenbergCompiler:
 
             self.psd_blocks.append(psd)
 
-    def _total_spin_comm(self, pstr: PauliString, axis_code: int) -> PauliOperator:
-        '''
-            return [S^a_tot, O] as a Pauli operator
-            axis_code: X=1=01, Z=2=10, Y=3=11
-        '''
-        X, Y, Z = 1, 3, 2
-        coeffs = {
-            (X, Y): 1j,  # [Sx, Y] =  i Z
-            (Y, Z): 1j,  # [Sy, Z] =  i X
-            (Z, X): 1j,  # [Sz, X] =  i Y
-            (X, Z): -1j, # [Sx, Z] = -i Y
-            (Z, Y): -1j, # [Sz, Y] = -i X
-            (Y, X): -1j, # [Sy, X] = -i Z
-        }
-        op = PauliOperator()
-        support = pstr.mask
-        while support:
-            bit = support & -support
-            site = (bit.bit_length() - 1) // 2
-            old_code = (pstr.mask >> (2*site)) & 3
-            support &= ~(3 << (2*site))
-            if old_code == axis_code:
-                continue
-
-            new_mask = (pstr.mask & ~(3 << (2*site))) | ((axis_code ^ old_code) << (2*site))
-            op.add(PauliString(self.L, new_mask), coeffs[(axis_code, old_code)])
-        return op
-
     def _hamil_comm(self, pstr: PauliString) -> PauliOperator:
         if not hasattr(self, '_hamil_terms_by_site'):
             self._hamil_terms_by_site = [[] for _ in range(self.L)]
@@ -256,6 +228,27 @@ class HeisenbergCompiler:
                     op.add(prod, 2 * hcoeff * phase)
         return op
 
+    def _spin_comm(self, pstr: PauliString, axis: str) -> PauliOperator:
+        '''
+            return [S^a_tot, O] as a Pauli operator
+        '''
+        assert axis in ('X', 'Y', 'Z')
+        axis_code = _PAULI_CODE[axis]
+        op = PauliOperator()
+        support = pstr.mask
+        while support:
+            bit = support & -support
+            site = (bit.bit_length() - 1) // 2
+            old_code = (pstr.mask >> (2*site)) & 3
+            support &= ~(3 << (2*site))
+            if old_code == axis_code:
+                continue
+
+            new_mask = (pstr.mask & ~(3 << (2*site))) | ((axis_code ^ old_code) << (2*site))
+            coeff = _PAULI_PHASE[_PAULI_MUL_PHASE_POWER[axis_code][old_code]]
+            op.add(PauliString(self.L, new_mask), coeff)
+        return op
+
     def _build_affines(self):
         self.affines = AffineConstraints(n_vars=len(self.vars))
 
@@ -272,9 +265,9 @@ class HeisenbergCompiler:
             self.affines.add(expr)
 
         # SO(3) Ward identities
-        for axis_code in (1, 3, 2): # X, Y, Z
+        for axis in 'XYZ':
             for pstr in self.ward_moments['spin']:
-                expr = self._compile_expr(self._total_spin_comm(pstr, axis_code))
+                expr = self._compile_expr(self._spin_comm(pstr, axis))
                 if expr is None:
                     continue
                 self.affines.add(expr)
@@ -313,9 +306,9 @@ class HeisenbergCompiler:
 
     def descendants(self, pstr: PauliString):
         entries = {}
-        comm = self._hamil_comm(pstr)
+        comm_op = self._hamil_comm(pstr)
 
-        for desc, coeff in comm.terms.items():
+        for desc, coeff in comm_op.terms.items():
             desc_rep = desc.canon_rep
             s = 0
             for shift in range(desc.L):

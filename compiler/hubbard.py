@@ -71,7 +71,7 @@ class HubbardCompiler:
     block_reprs: list[list[MajoranaMonomial]]
     block_momenta: list[int]
 
-    # moment variables are real expectations of
+    # SDP variables are real expectations of
     # hermitianized Majorana monomials with even fermion parity
     var_cpx: bool = False
     var_index: dict[int, int]
@@ -240,6 +240,57 @@ class HubbardCompiler:
                     psd.add(row, col, LinearExpr(terms=expr, const=0))
             self.psd_blocks.append(psd)
 
+    def _hamil_comm(self, monomial: MajoranaMonomial) -> MajoranaOperator:
+        if not hasattr(self, '_hamil_terms_by_site'):
+            self._hamil_terms_by_site = [[] for _ in range(self.L)]
+            for hstr, hcoeff in self.hamil_op.terms.items():
+                support = hstr.mask
+                h_degree = hstr.mask.bit_count()
+                while support:
+                    bit = support & -support
+                    site = (bit.bit_length() - 1) // 4
+                    support &= ~(0xf << (4*site))
+                    self._hamil_terms_by_site[site].append((hstr, hcoeff, h_degree))
+
+        op = MajoranaOperator()
+        seen = set()
+        degree = monomial.mask.bit_count()
+        support = monomial.mask
+        while support:
+            bit = support & -support
+            site = (bit.bit_length() - 1) // 4
+            support &= ~(0xf << (4*site))
+
+            for hstr, hcoeff, h_degree in self._hamil_terms_by_site[site]:
+                if hstr.mask in seen:
+                    continue
+                seen.add(hstr.mask)
+
+                overlap = (hstr.mask & monomial.mask).bit_count()
+                if (h_degree * degree - overlap) & 1:
+                    prod, sign = hstr.mul(monomial)
+                    op.add(prod, 2 * hcoeff * sign)
+        return op
+
+    def _number_comm(self, monomial: MajoranaMonomial, spin: str) -> MajoranaOperator:
+        '''
+            return [N_s, O] as a Majorana operator
+            spin: 'u' or 'd'
+        '''
+        assert spin in ('u', 'd')
+        spin_offset = 0 if spin == 'u' else 2
+        op = MajoranaOperator()
+
+        for site in range(self.L):
+            pair_mask = 0b11 << (4*site + spin_offset)
+            if (monomial.mask & pair_mask).bit_count() != 1:
+                continue
+
+            number_term = MajoranaMonomial(self.L, pair_mask)
+            prod, sign = number_term.mul(monomial)
+            op.add(prod, 1j * sign / self.L)
+        return op
+
     def _build_affines(self):
         self.affines = AffineConstraints(n_vars=len(self.vars))
 
@@ -264,16 +315,14 @@ class HubbardCompiler:
             self.affines.add(number_var_expr)
 
         # Ward identities
-        generators = (
-            # time translation (stationarity)
-            self.hamil_op,
-            # U(1)
-            self.number_up_op,
-            self.number_dn_op,
-        )
-        for generator in generators:
-            for monomial in self.ward_moments:
-                comm_op = generator.commutator(MajoranaOperator({monomial: 1}))
+        for monomial in self.ward_moments:
+            for comm_op in (
+                # time translation (stationarity)
+                self._hamil_comm(monomial),
+                # U(1)
+                self._number_comm(monomial, 'u'),
+                self._number_comm(monomial, 'd'),
+            ):
                 expr = self._compile_expr(comm_op)
                 if expr is None:
                     continue
@@ -317,18 +366,11 @@ class HubbardCompiler:
                 C_a = [H, O_a(0)] = \sum_{b,s} C_{ab}(s) T_s O'(0)_b
 
             as entry list [(O'(0)_b, s, C_{ab}(s)), ...]
-
-            [NOT IMPLEMENTED]
-            Locality pruning would require computing [h(r), O_a(0)] term by term.
-            If two Majorana monomials A and B have disjoint support, then
-            BA = (-1)^{deg(A) deg(B)} AB. Hubbard Hamiltonian terms are even,
-            and bootstrap basis representatives are normally fermion-even, so
-            disjoint terms commute and can be skipped.
         '''
         entries = {}
-        comm = self.hamil_op.commutator(MajoranaOperator({monomial: 1}))
+        comm_op = self._hamil_comm(monomial)
 
-        for desc, coeff in comm.terms.items():
+        for desc, coeff in comm_op.terms.items():
             desc_rep = desc.canon_rep
             s, s_sign = 0, 1
             for shift in range(desc.L):
