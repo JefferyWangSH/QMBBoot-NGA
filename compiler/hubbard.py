@@ -76,18 +76,9 @@ class HubbardCompiler:
     var_cpx: bool = False
     var_index: dict[int, int]
     vars: list[MajoranaMonomial]
+    _is_var_cache: dict[int, bool]
 
-    # moments for generating Ward identities
-    ward_index: dict[int, int]
-    ward_moments: list[MajoranaMonomial]
-
-    # cache of moment flags
-    # var:  SDP variables allowed by symmetries, e.g. 10, 11
-    # ward: moment for generating Ward identities, e.g. 01, 11
-    # zero: moment pruned by symmetries with zero expectation value, e.g. 00, 01
-    _moment_var = 1 << 0
-    _moment_ward = 1 << 1
-    _moment_flags_cache: dict[int, int]
+    ward_ops: dict[str, int]
 
     psd_blocks: list[PSDConstraints]
     affines: AffineConstraints
@@ -95,6 +86,7 @@ class HubbardCompiler:
 
     hamil_op: MajoranaOperator
     hamil_expr: LinearExpr
+    _hamil_terms_at_site: list[list[tuple[int, float | complex, tuple[int, ...]]]]
 
     number_op: MajoranaOperator
     number_up_op: MajoranaOperator
@@ -104,11 +96,31 @@ class HubbardCompiler:
         self.L = params.L
         self.params = params
         self.n_particles = params.n_particles
+        self._is_var_cache = {}
+        self.ward_ops = {'hamil': 0, 'Nu': 0, 'Nd': 0}
+
         self.hamil_op = build_hamil(params)
+        self._hamil_terms_at_site = [[] for _ in range(self.L)]
+        for h_mono, h_coeff in self.hamil_op.terms.items():
+            h_mask = h_mono.mask
+            support = h_mask
+            lower_masks = []
+            while support:
+                bit = support & -support
+                mode = bit.bit_length() - 1
+                lower_masks.append((1 << mode) - 1)
+                support ^= bit
+
+            support = h_mask
+            while support:
+                bit = support & -support
+                site = (bit.bit_length() - 1) // 4
+                support &= ~(0xf << (4*site))
+                self._hamil_terms_at_site[site].append((h_mask, h_coeff, tuple(lower_masks)))
+
         self.number_up_op = build_number(params, spin='u')
         self.number_dn_op = build_number(params, spin='d')
         self.number_op = self.number_up_op + self.number_dn_op
-        self._moment_flags_cache = {}
 
     @staticmethod
     def _moment(monomial1: MajoranaMonomial, monomial2: MajoranaMonomial) -> tuple[MajoranaMonomial, complex]:
@@ -120,48 +132,33 @@ class HubbardCompiler:
 
     @staticmethod
     def _translation_pruned(monomial):
-        mask = monomial.mask
-        for r in range(monomial.L):
-            rot_mask, sign = monomial._rotate_l(mask, r, return_sign=True)
-            # check if T^\dag(r) O T(r) = -O
-            if rot_mask == mask and sign == -1:
-                return True
-        return False
-
-    def _flag(self, monomial):
-        mask = monomial.mask
-        if mask in self._moment_flags_cache:
-            return self._moment_flags_cache[mask]
-
-        flag = 0
-        if monomial.fermion_parity() == -1 or self._translation_pruned(monomial):
-            self._moment_flags_cache[mask] = flag
-            return flag
-
-        if monomial.k_parity(hermitian=True) == 1:
-            flag |= self._moment_var
-        else:
-            flag |= self._moment_ward
-        self._moment_flags_cache[mask] = flag
-        return flag
+        # check if there exists r such that T^\dag(r) O T(r) = -O
+        return monomial.period_sign == -1
 
     def _is_var(self, monomial):
-        return bool(self._flag(monomial) & self._moment_var)
-
-    def _is_ward(self, monomial):
-        return bool(self._flag(monomial) & self._moment_ward)
+        '''
+            SDP variables should have even fermion parity and even K parity
+            specially, monomials with negative period sign have zero expectation values
+            when translation invariance is assumed, and should not be SDP variables.
+        '''
+        mask = monomial.mask
+        if mask not in self._is_var_cache:
+            self._is_var_cache[mask] = (
+                monomial.fermion_parity() == 1
+                and not self._translation_pruned(monomial)
+                and monomial.k_parity(hermitian=True) == 1
+            )
+        return self._is_var_cache[mask]
 
     def _is_zero(self, monomial):
         return not self._is_var(monomial)
 
-    def _build_moments(self):
+    def _build_vars(self):
         '''
-            build SDP variables and moments for generating Ward identities
+            build SDP variables
         '''
         self.var_index = {}
         self.vars = []
-        self.ward_index = {}
-        self.ward_moments = []
 
         for monomial1 in self.basis_reprs:
             for r in range(self.L):
@@ -174,12 +171,6 @@ class HubbardCompiler:
                         if key not in self.var_index:
                             self.var_index[key] = len(self.vars)
                             self.vars.append(MajoranaMonomial(L=self.L, mask=key))
-
-                    if self._is_ward(monomial):
-                        key = monomial.canon
-                        if key not in self.ward_index:
-                            self.ward_index[key] = len(self.ward_moments)
-                            self.ward_moments.append(MajoranaMonomial(L=self.L, mask=key))
 
     @staticmethod
     def nonzero_fourier(monomial: MajoranaMonomial, n: int) -> bool:
@@ -223,8 +214,6 @@ class HubbardCompiler:
                         if self._is_zero(monomial):
                             continue
                         key, canon_sign = monomial.canon, monomial.canon_sign
-                        if key not in self.var_index:
-                            raise ValueError(f'monomial <{str(monomial)}> is not an SDP variable')
 
                         # combine Fourier phase, translation/multiplication/canonical signs,
                         # then divide by the hermitian phase so moment variables stay real.
@@ -235,42 +224,72 @@ class HubbardCompiler:
                         )
                         idx = self.var_index[key]
                         expr[idx] = expr.get(idx, 0) + coeff
-                        if abs(expr[idx]) < 1e-12:
+                        if abs(expr[idx]) < 1e-14:
                             del expr[idx]
                     psd.add(row, col, LinearExpr(terms=expr, const=0))
             self.psd_blocks.append(psd)
 
     def _hamil_comm(self, monomial: MajoranaMonomial) -> MajoranaOperator:
-        if not hasattr(self, '_hamil_terms_by_site'):
-            self._hamil_terms_by_site = [[] for _ in range(self.L)]
-            for hstr, hcoeff in self.hamil_op.terms.items():
-                support = hstr.mask
-                h_degree = hstr.mask.bit_count()
-                while support:
-                    bit = support & -support
-                    site = (bit.bit_length() - 1) // 4
-                    support &= ~(0xf << (4*site))
-                    self._hamil_terms_by_site[site].append((hstr, hcoeff, h_degree))
-
         op = MajoranaOperator()
         seen = set()
-        degree = monomial.mask.bit_count()
         support = monomial.mask
         while support:
             bit = support & -support
             site = (bit.bit_length() - 1) // 4
             support &= ~(0xf << (4*site))
 
-            for hstr, hcoeff, h_degree in self._hamil_terms_by_site[site]:
-                if hstr.mask in seen:
+            for h_mask, h_coeff, lower_masks in self._hamil_terms_at_site[site]:
+                if h_mask in seen:
                     continue
-                seen.add(hstr.mask)
+                seen.add(h_mask)
 
-                overlap = (hstr.mask & monomial.mask).bit_count()
-                if (h_degree * degree - overlap) & 1:
-                    prod, sign = hstr.mul(monomial)
-                    op.add(prod, 2 * hcoeff * sign)
+                anticomm = (h_mask & monomial.mask).bit_count() & 1
+                if anticomm:
+                    sign = -1 if sum((monomial.mask & lower_mask).bit_count() for lower_mask in lower_masks) & 1 else 1
+                    prod = MajoranaMonomial(self.L, h_mask ^ monomial.mask)
+                    op.add(prod, 2 * h_coeff * sign)
         return op
+
+    def _add_hamil_wards(self):
+        r'''
+            add representable stationarity Ward identities <[H, O]> == 0
+            within the current SDP variable set
+
+            candidate O must have odd K parity and even fermion parity.
+        '''
+        seen_masks = set()
+        seen_keys = set()
+
+        for var in self.vars:
+            support = var.mask
+            while support:
+                bit = support & -support
+                site = (bit.bit_length() - 1) // 4
+                support &= ~(0xf << (4*site))
+
+                for h_mask, _, _ in self._hamil_terms_at_site[site]:
+                    anticomm = (h_mask & var.mask).bit_count() & 1
+                    if not anticomm:
+                        continue
+
+                    mask = var.mask ^ h_mask
+                    if mask in seen_masks:
+                        continue
+                    seen_masks.add(mask)
+
+                    cand = MajoranaMonomial(self.L, mask)
+                    key = cand.canon
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    if self._translation_pruned(cand):
+                        continue
+
+                    expr = self._compile_expr(self._hamil_comm(cand))
+                    if expr is None or not expr.terms:
+                        continue
+                    self.affines.add(expr)
+                    self.ward_ops['hamil'] += 1
 
     def _number_comm(self, monomial: MajoranaMonomial, spin: str) -> MajoranaOperator:
         '''
@@ -281,18 +300,75 @@ class HubbardCompiler:
         spin_offset = 0 if spin == 'u' else 2
         op = MajoranaOperator()
 
-        for site in range(self.L):
-            pair_mask = 0b11 << (4*site + spin_offset)
-            if (monomial.mask & pair_mask).bit_count() != 1:
+        support = monomial.mask
+        while support:
+            bit = support & -support
+            mode = bit.bit_length() - 1
+            site, rem = divmod(mode, 4)
+            support ^= bit
+            if rem // 2 != spin_offset // 2:
                 continue
 
-            number_term = MajoranaMonomial(self.L, pair_mask)
-            prod, sign = number_term.mul(monomial)
+            lo_bit = 1 << (4*site + spin_offset)
+            number_mask = lo_bit | (lo_bit << 1)
+            overlap = monomial.mask & number_mask
+            if overlap == 0 or overlap == number_mask:
+                continue
+
+            prod = MajoranaMonomial(self.L, monomial.mask ^ number_mask)
+            sign = -1 if overlap == lo_bit else 1
             op.add(prod, 1j * sign / self.L)
         return op
 
+    def _add_number_wards(self, spin: str):
+        r'''
+            add representable U(1) Ward identities <[N_s, O]> == 0
+            within the current SDP variable set
+
+            candidate O must have odd K parity and even fermion parity.
+        '''
+        assert spin in ('u', 'd')
+        spin_offset = 0 if spin == 'u' else 2
+        seen_masks = set()
+        seen_keys = set()
+
+        for var in self.vars:
+            support = var.mask
+            while support:
+                bit = support & -support
+                mode = bit.bit_length() - 1
+                site, rem = divmod(mode, 4)
+                support ^= bit
+                # bypass mismatched spin sector
+                if rem // 2 != spin_offset // 2:
+                    continue
+
+                number_mask = 0b11 << (4*site + spin_offset)
+                if (var.mask & number_mask).bit_count() != 1:
+                    continue
+                mask = var.mask ^ number_mask
+                if mask in seen_masks:
+                    continue
+                seen_masks.add(mask)
+
+                cand = MajoranaMonomial(self.L, mask)
+                key = cand.canon
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                if self._translation_pruned(cand):
+                    continue
+
+                expr = self._compile_expr(self._number_comm(cand, spin))
+                if expr is None or not expr.terms:
+                    continue
+                self.affines.add(expr)
+                self.ward_ops[f'N{spin}'] += 1
+
     def _build_affines(self):
         self.affines = AffineConstraints(n_vars=len(self.vars))
+        for key in self.ward_ops:
+            self.ward_ops[key] = 0
 
         id_key = MajoranaMonomial.identity(self.L).canon
         if id_key not in self.var_index:
@@ -315,18 +391,9 @@ class HubbardCompiler:
             self.affines.add(number_var_expr)
 
         # Ward identities
-        for monomial in self.ward_moments:
-            for comm_op in (
-                # time translation (stationarity)
-                self._hamil_comm(monomial),
-                # U(1)
-                self._number_comm(monomial, 'u'),
-                self._number_comm(monomial, 'd'),
-            ):
-                expr = self._compile_expr(comm_op)
-                if expr is None:
-                    continue
-                self.affines.add(expr)
+        self._add_hamil_wards()
+        self._add_number_wards('u')
+        self._add_number_wards('d')
 
         self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-12)
 
@@ -347,7 +414,7 @@ class HubbardCompiler:
     def compile(self, basis_reprs: list[MajoranaMonomial]):
         # build moments and PSD blocks
         self.basis_reprs = basis_reprs
-        self._build_moments()
+        self._build_vars()
         self._build_block_reprs()
         self._build_psd()
 
@@ -403,7 +470,7 @@ class HubbardCompiler:
             'params': self.params,
             'basis_reprs': len(self.basis_reprs),
             'vars': len(self.vars),
-            'ward_moments': len(self.ward_moments),
+            'ward_ops': self.ward_ops,
             'psd_blocks': len(self.psd_blocks),
             'psd_dims_sum': sum(psd.dim for psd in self.psd_blocks),
             'psd_dims': [psd.dim for psd in self.psd_blocks],

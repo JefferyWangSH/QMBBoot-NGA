@@ -85,9 +85,9 @@ class IsingCompiler:
     # Hamiltonian terms bucketed by every site in their support
     # for each site, it involves a list of
     # h_sites: tuple of (site, Pauli code)
-    # hstr: Hamiltonian PauliString
-    # hcoeff: Hamiltonian coefficient
-    _hamil_terms_at_site: list[list[tuple[tuple[tuple[int, int], ...], PauliString, float | complex]]]
+    # h_mask: Hamiltonian Pauli mask
+    # h_coeff: Hamiltonian coefficient
+    _hamil_terms_at_site: list[list[tuple[tuple[tuple[int, int], ...], int, float | complex]]]
 
     def __init__(self, params: IsingParams):
         self.L = params.L
@@ -96,19 +96,20 @@ class IsingCompiler:
 
         self.hamil_op = build_hamil(params)
         self._hamil_terms_at_site = [[] for _ in range(self.L)]
-        for hstr, hcoeff in self.hamil_op.terms.items():
+        for hstr, h_coeff in self.hamil_op.terms.items():
+            h_mask = hstr.mask
             h_sites = []
-            support = hstr.mask
+            support = h_mask
             while support:
                 bit = support & -support
                 site = (bit.bit_length() - 1) // 2
-                code = (hstr.mask >> (2*site)) & 3
+                code = (h_mask >> (2*site)) & 3
                 h_sites.append((site, code))
                 support &= ~(3 << (2*site))
 
             h_sites = tuple(h_sites)
             for site, _ in h_sites:
-                self._hamil_terms_at_site[site].append((h_sites, hstr, hcoeff))
+                self._hamil_terms_at_site[site].append((h_sites, h_mask, h_coeff))
 
     def _build_vars(self):
         '''
@@ -182,7 +183,7 @@ class IsingCompiler:
                         idx = self.var_index[pstr.canon]
                         coeff = np.exp(1j * k * r) * phase / self.L
                         expr[idx] = expr.get(idx, 0) + coeff
-                        if abs(expr[idx]) < 1e-12:
+                        if abs(expr[idx]) < 1e-14:
                             del expr[idx]
                     psd.add(row, col, LinearExpr(terms=expr, const=0))
 
@@ -197,10 +198,10 @@ class IsingCompiler:
             site = (bit.bit_length() - 1) // 2
             support &= ~(3 << (2*site))
 
-            for h_sites, hstr, hcoeff in self._hamil_terms_at_site[site]:
-                if hstr.mask in seen:
+            for h_sites, h_mask, h_coeff in self._hamil_terms_at_site[site]:
+                if h_mask in seen:
                     continue
-                seen.add(hstr.mask)
+                seen.add(h_mask)
 
                 anticomm = 0
                 phase_power = 0
@@ -211,8 +212,8 @@ class IsingCompiler:
                     phase_power += _PAULI_MUL_PHASE_POWER[h_code][p_code]
 
                 if anticomm:
-                    prod = PauliString(self.L, hstr.mask ^ pstr.mask)
-                    op.add(prod, 2 * hcoeff * _PAULI_PHASE[phase_power & 3])
+                    prod = PauliString(self.L, h_mask ^ pstr.mask)
+                    op.add(prod, 2 * h_coeff * _PAULI_PHASE[phase_power & 3])
         return op
 
     def _compile_hamil_ward(self, pstr: PauliString) -> LinearExpr | None:
@@ -224,10 +225,10 @@ class IsingCompiler:
             site = (bit.bit_length() - 1) // 2
             support &= ~(3 << (2*site))
 
-            for h_sites, hstr, hcoeff in self._hamil_terms_at_site[site]:
-                if hstr.mask in seen:
+            for h_sites, h_mask, h_coeff in self._hamil_terms_at_site[site]:
+                if h_mask in seen:
                     continue
-                seen.add(hstr.mask)
+                seen.add(h_mask)
 
                 anticomm = 0
                 phase_power = 0
@@ -242,13 +243,13 @@ class IsingCompiler:
                 if not anticomm:
                     continue
 
-                prod = PauliString(self.L, hstr.mask ^ pstr.mask)
+                prod = PauliString(self.L, h_mask ^ pstr.mask)
                 key = prod.canon
                 if key not in self.var_index:
                     return None
 
                 idx = self.var_index[key]
-                expr[idx] = expr.get(idx, 0) + 2 * hcoeff * _PAULI_PHASE[phase_power & 3]
+                expr[idx] = expr.get(idx, 0) + 2 * h_coeff * _PAULI_PHASE[phase_power & 3]
                 if expr[idx] == 0:
                     del expr[idx]
 
@@ -257,7 +258,7 @@ class IsingCompiler:
     def _add_hamil_wards(self):
         r'''
             add all representable stationarity Ward identities <[H, O]> == 0
-            found from the existing K-even PSD variable set.
+            within the current SDP variable set
 
             as explicitly ensured in this function,
             non-trivial stationarity constraints come from K-odd O.
@@ -271,7 +272,7 @@ class IsingCompiler:
                 site = (bit.bit_length() - 1) // 2
                 support &= ~(3 << (2*site))
 
-                for h_sites, hstr, _ in self._hamil_terms_at_site[site]:
+                for h_sites, h_mask, _ in self._hamil_terms_at_site[site]:
                     anticomm = 0
                     for h_site, h_code in h_sites:
                         p_code = (pstr.mask >> (2*h_site)) & 3
@@ -283,19 +284,20 @@ class IsingCompiler:
                     if not anticomm:
                         continue
 
-                    mask = pstr.mask ^ hstr.mask
+                    mask = pstr.mask ^ h_mask
                     if mask in seen_masks:
                         continue
                     seen_masks.add(mask)
 
                     cand = PauliString(self.L, mask)
-                    expr = self._compile_hamil_ward(cand)
-                    if expr is None or not expr.terms:
-                        continue
                     key = cand.canon
                     if key in seen_keys:
                         continue
                     seen_keys.add(key)
+
+                    expr = self._compile_hamil_ward(cand)
+                    if expr is None or not expr.terms:
+                        continue
                     self.affines.add(expr)
                     self.ward_ops['hamil'] += 1
 
