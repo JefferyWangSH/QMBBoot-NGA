@@ -494,7 +494,7 @@ flowchart LR
 
 Its physical interpretation is that the primal near-nullspace proposes approximate ground-state annihilators, while Hamiltonian descendants test whether those annihilators close under the dynamics (if so, they are more likely to be physical).
 
-#### *4.1. Local commutator cache*
+#### *4.1. Descendant commutator cache*
 The naive growth procedure is expensive because each near-null PSD direction constructs a Fourier-expanded null operator and then calculates the commutator. For one momentum sector, write schematically
 $$
     \mathcal{O}_a(k) = \frac{1}{\sqrt{L}} \sum_r e^{-ikr} \mathcal{O}_a(r).

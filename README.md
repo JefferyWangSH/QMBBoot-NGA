@@ -10,13 +10,19 @@
 
 ## Models
 * *Transverse-field Ising chain*
-  * Lattice translation symmetry to generate momentum PSD blocks
+  * lattice translation symmetry to generate momentum PSD blocks
   * $\mathcal{K}$-symmetry (complex conjugation)
+* *$J_1$-$J_2$ Heisenberg chain*
+  * lattice translation symmetry to generate momentum PSD blocks
+  * lattice inversion
+  * $\mathcal{K}$-symmetry (complex conjugation)
+  * spin label permutation $S_3$
+  * $SO(3)$ spin rotation; $\pi$-rotation subgroup $C_2^3$ to further divide PSD blocks
 * *Hubbard chain*
-  * Lattice translation symmetry to generate momentum PSD blocks
+  * lattice translation symmetry to generate momentum PSD blocks
   * $\mathcal{K}$-symmetry (complex conjugation)
-  * Fermion parity
-  * $U_\uparrow(1)\times U_\downarrow(1)$ symmetry; fixed filling number
+  * fermion parity
+  * $U_\uparrow(1)\times U_\downarrow(1)$ charge symmetry; fixed filling number
 
 ## TODOs
 Check https://arxiv.org/abs/2412.07837.

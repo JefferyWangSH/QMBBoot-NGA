@@ -40,14 +40,10 @@ class HeisenbergCompiler:
     var_cpx: bool = False
     var_index: dict[int, int]
     vars: list[PauliString]
-
-    ward_index: dict[str, dict[int, int]]
-    ward_moments: dict[str, list[PauliString]]
-
-    _moment_var = 1 << 0
-    _moment_ward = 1 << 1
-    _moment_flags_cache: dict[int, int]
+    _is_var_cache: dict[int, bool]
     _sym_canon_cache: dict[int, int]
+
+    ward_ops: dict[str, int]
 
     # we divide PSD blocks through both translation and spin-rotation of pi angle
     block_reprs: list[list[PauliString]]
@@ -59,68 +55,56 @@ class HeisenbergCompiler:
 
     hamil_op: PauliOperator
     hamil_expr: LinearExpr
+    _hamil_terms_at_site: list[list[tuple[int, int, PauliString, float | complex]]]
 
     def __init__(self, params: HeisenbergParams):
         self.L = params.L
         self.params = params
-        self.hamil_op = build_hamil(params)
-        self._moment_flags_cache = {}
+        self._is_var_cache = {}
         self._sym_canon_cache = {}
+        self.ward_ops = {'hamil': 0, 'Sx': 0, 'Sy': 0, 'Sz': 0}
 
-    def _flag(self, pstr: PauliString):
-        if pstr.mask in self._moment_flags_cache:
-            return self._moment_flags_cache[pstr.mask]
+        self.hamil_op = build_hamil(params)
+        self._hamil_terms_at_site = [[] for _ in range(self.L)]
+        for hstr, hcoeff in self.hamil_op.terms.items():
+            sites = []
+            support = hstr.mask
+            while support:
+                bit = support & -support
+                site = (bit.bit_length() - 1) // 2
+                code = (hstr.mask >> (2 * site)) & 3
+                sites.append((site, code))
+                support &= ~(3 << (2 * site))
 
-        '''
-            1) vars must have sign charge 000, which is definitely also K-even.
-
-            2) [H,O] preserves pi-rotation charge, therefore to generate non-trivial stationarity constraints
-               O must have pi-rotation charge ++, i.e. sign charge 000/111.
-               Among them, only 111 sector is K-odd and gives K-even commutators.
-
-            3) non-trivial SO(3) Ward constraints come from commutations with charges S^a_{tot} (100, 010 and 001),
-               hence ward moments must have sign charges 011, 101, or 110.
-
-            In summary,
-
-                000:         SDP variables
-                111:         Hamiltonian Ward operators
-                011/101/110: SO(3) Ward operators
-        '''
-        charge = pstr.sign_charge()
-        flag = 0
-        if charge == (0, 0, 0):
-            flag |= self._moment_var
-        elif charge in ((1, 1, 1), (0, 1, 1), (1, 0, 1), (1, 1, 0)):
-            flag |= self._moment_ward
-
-        self._moment_flags_cache[pstr.mask] = flag
-        return flag
+            (site1, code1), (site2, code2) = sites
+            self._hamil_terms_at_site[site1].append((site2, code1, hstr, hcoeff))
+            self._hamil_terms_at_site[site2].append((site1, code2, hstr, hcoeff))
 
     def _is_var(self, pstr: PauliString):
-        return bool(self._flag(pstr) & self._moment_var) # 000
-
-    def _is_ward(self, pstr: PauliString):
-        return bool(self._flag(pstr) & self._moment_ward) # 111/011/101/110
+        if pstr.mask not in self._is_var_cache:
+            # vars must have sign charge 000, which is definitely also K-even.
+            self._is_var_cache[pstr.mask] = pstr.sign_charge() == (0, 0, 0)
+        return self._is_var_cache[pstr.mask]
 
     def _is_zero(self, pstr: PauliString):
-        return not self._is_var(pstr) # not 000
+        return not self._is_var(pstr)
 
     def _sym_canon(self, pstr: PauliString):
         if pstr.mask in self._sym_canon_cache:
             return self._sym_canon_cache[pstr.mask]
 
-        orbit = [pstr.permute(perm) for perm in itertools.permutations('XYZ')]
+        orbit = []
+        for base in (pstr, pstr.invert()):
+            for perm in itertools.permutations('XYZ'):
+                orbit.append(base.permute(perm))
         key = min(rep.canon for rep in orbit)
         for rep in orbit:
             self._sym_canon_cache[rep.mask] = key
         return key
 
-    def _build_moments(self):
+    def _build_vars(self):
         self.vars = []
         self.var_index = {}
-        self.ward_moments = {'hamil': [], 'spin': []}
-        self.ward_index = {'hamil': {}, 'spin': {}}
 
         for pstr1 in self.basis_reprs:
             for r in range(pstr1.period):
@@ -133,14 +117,6 @@ class HeisenbergCompiler:
                         if key not in self.var_index:
                             self.var_index[key] = len(self.vars)
                             self.vars.append(PauliString(self.L, key))
-
-                    if self._is_ward(pstr):
-                        charge = pstr.sign_charge()
-                        kind = 'hamil' if charge == (1, 1, 1) else 'spin'
-                        key = pstr.canon
-                        if key not in self.ward_index[kind]:
-                            self.ward_index[kind][key] = len(self.ward_moments[kind])
-                            self.ward_moments[kind].append(PauliString(self.L, key))
 
     @staticmethod
     def nonzero_fourier(pstr: PauliString, n: int) -> bool:
@@ -188,45 +164,114 @@ class HeisenbergCompiler:
             self.psd_blocks.append(psd)
 
     def _hamil_comm(self, pstr: PauliString) -> PauliOperator:
-        if not hasattr(self, '_hamil_terms_by_site'):
-            self._hamil_terms_by_site = [[] for _ in range(self.L)]
-            for hstr, hcoeff in self.hamil_op.terms.items():
-                support = hstr.mask
-                while support:
-                    bit = support & -support
-                    site = (bit.bit_length() - 1) // 2
-                    support &= ~(3 << (2*site))
-                    self._hamil_terms_by_site[site].append((hstr, hcoeff))
-
         op = PauliOperator()
         seen = set()
         support = pstr.mask
         while support:
             bit = support & -support
             site = (bit.bit_length() - 1) // 2
-            support &= ~(3 << (2*site))
+            p_code = (pstr.mask >> (2 * site)) & 3
+            support &= ~(3 << (2 * site))
 
-            for hstr, hcoeff in self._hamil_terms_by_site[site]:
+            for neighbor_site, axis_code, hstr, hcoeff in self._hamil_terms_at_site[site]:
                 if hstr.mask in seen:
                     continue
                 seen.add(hstr.mask)
 
-                anticomm = 0
-                h_support = hstr.mask
-                while h_support:
-                    h_bit = h_support & -h_support
-                    h_site = (h_bit.bit_length() - 1) // 2
-                    h_support &= ~(3 << (2*h_site))
-
-                    h_code = (hstr.mask >> (2*h_site)) & 3
-                    p_code = (pstr.mask >> (2*h_site)) & 3
-                    if p_code != 0 and p_code != h_code:
-                        anticomm ^= 1
-
+                neighbor_code = (pstr.mask >> (2 * neighbor_site)) & 3
+                anticomm = (
+                    (p_code != 0 and p_code != axis_code)
+                  ^ (neighbor_code != 0 and neighbor_code != axis_code)
+                )
                 if anticomm:
-                    prod, phase = hstr.mul(pstr)
-                    op.add(prod, 2 * hcoeff * phase)
+                    phase_power = (
+                        _PAULI_MUL_PHASE_POWER[axis_code][p_code]
+                      + _PAULI_MUL_PHASE_POWER[axis_code][neighbor_code]
+                    )
+                    prod = PauliString(self.L, hstr.mask ^ pstr.mask)
+                    op.add(prod, 2 * hcoeff * _PAULI_PHASE[phase_power & 3])
         return op
+
+    def _compile_hamil_ward(self, pstr: PauliString) -> LinearExpr | None:
+        expr = {}
+        seen = set()
+        support = pstr.mask
+        while support:
+            bit = support & -support
+            site = (bit.bit_length() - 1) // 2
+            p_code = (pstr.mask >> (2 * site)) & 3
+            support &= ~(3 << (2 * site))
+
+            for neighbor_site, axis_code, hstr, hcoeff in self._hamil_terms_at_site[site]:
+                if hstr.mask in seen:
+                    continue
+                seen.add(hstr.mask)
+
+                neighbor_code = (pstr.mask >> (2 * neighbor_site)) & 3
+                anticomm = (
+                    (p_code != 0 and p_code != axis_code)
+                  ^ (neighbor_code != 0 and neighbor_code != axis_code)
+                )
+                if not anticomm:
+                    continue
+
+                prod = PauliString(self.L, hstr.mask ^ pstr.mask)
+                prod_key = self._sym_canon(prod)
+                if prod_key not in self.var_index:
+                    return None
+
+                phase_power = (
+                    _PAULI_MUL_PHASE_POWER[axis_code][p_code]
+                  + _PAULI_MUL_PHASE_POWER[axis_code][neighbor_code]
+                )
+                idx = self.var_index[prod_key]
+                expr[idx] = expr.get(idx, 0) + 2 * hcoeff * _PAULI_PHASE[phase_power & 3]
+                if expr[idx] == 0:
+                    del expr[idx]
+
+        return LinearExpr(terms=expr, const=0)
+
+    def _add_hamil_wards(self):
+        r'''
+            add all representable stationarity Ward identities <[H, O]> == 0
+            found from the existing PSD variable set.
+
+            [H,O] preserves pi-rotation charge, therefore to generate non-trivial stationarity constraints
+            O must have pi-rotation charge ++, i.e. sign charge 000/111.
+            Among them, only 111 sector is K-odd and gives K-even commutators.
+            Given PSD variables have sign charge 000, this function should ensure that candidate O has sign charge 111.
+        '''
+        seen_masks = set()
+        seen_keys = set()
+        for pstr in self.vars:
+            support = pstr.mask
+            while support:
+                bit = support & -support
+                site = (bit.bit_length() - 1) // 2
+                p_code = (pstr.mask >> (2 * site)) & 3
+                support &= ~(3 << (2 * site))
+
+                for neighbor_site, axis_code, hstr, _ in self._hamil_terms_at_site[site]:
+                    if p_code == axis_code:
+                        continue
+                    neighbor_code = (pstr.mask >> (2 * neighbor_site)) & 3
+                    if neighbor_code != 0 and neighbor_code != axis_code:
+                        continue
+                    mask = pstr.mask ^ hstr.mask
+                    if mask in seen_masks:
+                        continue
+                    seen_masks.add(mask)
+
+                    cand = PauliString(self.L, mask)
+                    expr = self._compile_hamil_ward(cand)
+                    if expr is None or not expr.terms:
+                        continue
+                    key = cand.canon
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    self.affines.add(expr)
+                    self.ward_ops['hamil'] += 1
 
     def _spin_comm(self, pstr: PauliString, axis: str) -> PauliOperator:
         '''
@@ -239,18 +284,94 @@ class HeisenbergCompiler:
         while support:
             bit = support & -support
             site = (bit.bit_length() - 1) // 2
-            old_code = (pstr.mask >> (2*site)) & 3
+            p_code = (pstr.mask >> (2*site)) & 3
             support &= ~(3 << (2*site))
-            if old_code == axis_code:
+            if p_code == axis_code:
                 continue
 
-            new_mask = (pstr.mask & ~(3 << (2*site))) | ((axis_code ^ old_code) << (2*site))
-            coeff = _PAULI_PHASE[_PAULI_MUL_PHASE_POWER[axis_code][old_code]]
+            new_mask = (pstr.mask & ~(3 << (2*site))) | ((axis_code ^ p_code) << (2*site))
+            coeff = _PAULI_PHASE[_PAULI_MUL_PHASE_POWER[axis_code][p_code]]
             op.add(PauliString(self.L, new_mask), coeff)
         return op
 
+    def _compile_spin_ward(self, pstr: PauliString, axis: str) -> LinearExpr | None:
+        axis_code = _PAULI_CODE[axis]
+        expr = {}
+        support = pstr.mask
+        while support:
+            bit = support & -support
+            site = (bit.bit_length() - 1) // 2
+            p_code = (pstr.mask >> (2 * site)) & 3
+            support &= ~(3 << (2 * site))
+            if p_code == axis_code:
+                continue
+
+            mask = (pstr.mask & ~(3 << (2 * site))) | ((axis_code ^ p_code) << (2 * site))
+            prod = PauliString(self.L, mask)
+            if self._is_zero(prod):
+                continue
+            prod_key = self._sym_canon(prod)
+            if prod_key not in self.var_index:
+                return None
+
+            idx = self.var_index[prod_key]
+            expr[idx] = expr.get(idx, 0) + _PAULI_PHASE[_PAULI_MUL_PHASE_POWER[axis_code][p_code]]
+            if expr[idx] == 0:
+                del expr[idx]
+
+        return LinearExpr(terms=expr, const=0)
+
+    def _add_spin_wards(self):
+        r'''
+            add all representable SO(3) Ward identities <[S^a_tot, O]> == 0
+            found from the existing PSD variable set.
+
+            Non-trivial SO(3) Ward constraints come from commutations with charges S^a_{tot} (100, 010 and 001),
+            hence ward moments must have sign charges 011, 101, or 110.
+        '''
+        _AXIS_BY_CHARGE = {
+            (0, 1, 1): 'X',
+            (1, 0, 1): 'Y',
+            (1, 1, 0): 'Z',
+        }
+
+        seen_masks = set()
+        seen_keys = set()
+        for pstr in self.vars:
+            support = pstr.mask
+            while support:
+                bit = support & -support
+                site = (bit.bit_length() - 1) // 2
+                p_code = (pstr.mask >> (2 * site)) & 3
+                support &= ~(3 << (2 * site))
+
+                for axis_code in _PAULI_CODE.values():
+                    o_code = axis_code ^ p_code
+                    if o_code == 0 or o_code == axis_code:
+                        continue
+                    mask = (pstr.mask & ~(3 << (2 * site))) | (o_code << (2 * site))
+                    if mask in seen_masks:
+                        continue
+                    seen_masks.add(mask)
+
+                    cand = PauliString(self.L, mask)
+                    ward_axis = _AXIS_BY_CHARGE.get(cand.sign_charge())
+                    if ward_axis is None:
+                        continue
+                    expr = self._compile_spin_ward(cand, ward_axis)
+                    if expr is None or not expr.terms:
+                        continue
+                    key = cand.canon
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    self.affines.add(expr)
+                    self.ward_ops[f'S{ward_axis.lower()}'] += 1
+
     def _build_affines(self):
         self.affines = AffineConstraints(n_vars=len(self.vars))
+        for key in self.ward_ops:
+            self.ward_ops[key] = 0
 
         id_key = self._sym_canon(PauliString.from_str('I'*self.L))
         if id_key not in self.var_index:
@@ -258,21 +379,12 @@ class HeisenbergCompiler:
         self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
 
         # stationarity constraints
-        for pstr in self.ward_moments['hamil']:
-            expr = self._compile_expr(self._hamil_comm(pstr))
-            if expr is None:
-                continue
-            self.affines.add(expr)
+        self._add_hamil_wards()
 
         # SO(3) Ward identities
-        for axis in 'XYZ':
-            for pstr in self.ward_moments['spin']:
-                expr = self._compile_expr(self._spin_comm(pstr, axis))
-                if expr is None:
-                    continue
-                self.affines.add(expr)
+        self._add_spin_wards()
 
-        self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-10)
+        self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-12)
 
     def _compile_expr(self, op: PauliOperator) -> LinearExpr | None:
         expr = {}
@@ -294,7 +406,7 @@ class HeisenbergCompiler:
             if pstr.L != self.L:
                 raise ValueError('Pauli string length inconsistent with system size L')
 
-        self._build_moments()
+        self._build_vars()
         self._build_block_reprs()
         self._build_psd()
 
@@ -340,7 +452,7 @@ class HeisenbergCompiler:
             'params': self.params,
             'basis_reprs': len(self.basis_reprs),
             'vars': len(self.vars),
-            'ward_moments': {kind: len(moments) for kind, moments in self.ward_moments.items()},
+            'ward_ops': self.ward_ops,
             'psd_blocks': len(self.psd_blocks),
             'psd_dims_sum': sum(psd.dim for psd in self.psd_blocks),
             'psd_dims': [psd.dim for psd in self.psd_blocks],

@@ -235,7 +235,7 @@ class HubbardCompiler:
                         )
                         idx = self.var_index[key]
                         expr[idx] = expr.get(idx, 0) + coeff
-                        if expr[idx] == 0:
+                        if abs(expr[idx]) < 1e-12:
                             del expr[idx]
                     psd.add(row, col, LinearExpr(terms=expr, const=0))
             self.psd_blocks.append(psd)
@@ -328,7 +328,7 @@ class HubbardCompiler:
                     continue
                 self.affines.add(expr)
 
-        self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-10)
+        self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-12)
 
     def _compile_expr(self, op: MajoranaOperator) -> LinearExpr | None:
         expr = {}

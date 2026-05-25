@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import numpy as np
 import scipy as sp
 
-from operators.pauli import PauliString, PauliOperator
+from operators.pauli import PauliString, PauliOperator, _PAULI_PHASE, _PAULI_MUL_PHASE_POWER
 from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
 
 
@@ -55,16 +55,12 @@ class IsingCompiler:
         note we use the associated hermitian Pauli string (excluding the phase) as the moment variables,
         whose expectation values parameterize the optimization space of bootstrap.
 
-        K symmetry is used in
-            1) reducing moment variables,
-            2) relating M(k) and M(-k),
-            3) and reducing stationarity constraint generators.
+        K symmetry is used in 1) reducing moment variables and 2) relating M(k) and M(-k).
 
         var_cpx:       False
         vars:          K-even moment Pauli strings as SDP variables
         var_index:     map between canonical PauliString indices and variable indices
-        ward_moments:  K-odd moment Pauli strings for generating Ward identities
-        ward_index:    map between canonical PauliString indices and Ward moment indices
+        ward_ops:      number of Ward-identity operators O used to generate constraints
         block_reprs:   representative basis involved in each momentum PSD block
         block_momenta: momentum index to which each PSD block corresponds
         psd_blocks:    momentum PSD blocks
@@ -74,9 +70,7 @@ class IsingCompiler:
     var_cpx: bool = False
     var_index: dict[int, int]
     vars: list[PauliString]
-
-    ward_index: dict[int, int]
-    ward_moments: list[PauliString]
+    ward_ops: dict[str, int]
 
     block_reprs: list[list[PauliString]]
     block_momenta: list[int]
@@ -88,32 +82,50 @@ class IsingCompiler:
     hamil_op: PauliOperator # full hamiltonian operator for computations of stationarity constraints
     hamil_expr: LinearExpr  # compiled hamiltonian expression
 
+    # Hamiltonian terms bucketed by every site in their support
+    # for each site, it involves a list of
+    # h_sites: tuple of (site, Pauli code)
+    # hstr: Hamiltonian PauliString
+    # hcoeff: Hamiltonian coefficient
+    _hamil_terms_at_site: list[list[tuple[tuple[tuple[int, int], ...], PauliString, float | complex]]]
+
     def __init__(self, params: IsingParams):
         self.L = params.L
         self.params = params
+        self.ward_ops = {'hamil': 0}
+
         self.hamil_op = build_hamil(params)
+        self._hamil_terms_at_site = [[] for _ in range(self.L)]
+        for hstr, hcoeff in self.hamil_op.terms.items():
+            h_sites = []
+            support = hstr.mask
+            while support:
+                bit = support & -support
+                site = (bit.bit_length() - 1) // 2
+                code = (hstr.mask >> (2*site)) & 3
+                h_sites.append((site, code))
+                support &= ~(3 << (2*site))
 
-    def _build_moments(self):
+            h_sites = tuple(h_sites)
+            for site, _ in h_sites:
+                self._hamil_terms_at_site[site].append((h_sites, hstr, hcoeff))
+
+    def _build_vars(self):
         '''
-            build SDP variables and Ward moments
+            build K-even SDP variables
 
-            moment variables self.vars involve only K-even Pauli strings because:
+            SDP variables involve only K-even Pauli strings because:
 
                 1) the expectation value of K-odd Pauli string, which involves odd number of Y,
                    is purely imaginary given a K-symmetric denisty matrix.
 
                 2) any Pauli string is hermitian so its expectation should be real.
 
-            combining these facts yields <O_odd> = 0.
-            therefore any K-odd Pauli string can be removed from moment variables.
-
-            Pauli strings O in self.ward_moments are used to generate Ward identities, <[C,O]> == 0.
-            as shown in note.ipynb, only K-odd Pauli strings generate nontrivial constraints.
+            combining these facts yields <O_odd> = 0,
+            therefore any K-odd Pauli string can be removed from SDP variables.
         '''
         self.vars = []
         self.var_index = {}
-        self.ward_moments = []
-        self.ward_index = {}
 
         for pstr1 in self.basis_reprs:
             for r in range(pstr1.period):
@@ -122,14 +134,9 @@ class IsingCompiler:
                     pstr, _ = pstr1r.dag().mul(pstr2)
                     key = pstr.canon
 
-                    if pstr.parity() == 1:
-                        if key not in self.var_index:
-                            self.var_index[key] = len(self.vars)
-                            self.vars.append(pstr)
-                    else:
-                        if key not in self.ward_index:
-                            self.ward_index[key] = len(self.ward_moments)
-                            self.ward_moments.append(pstr)
+                    if pstr.parity() == 1 and key not in self.var_index:
+                        self.var_index[key] = len(self.vars)
+                        self.vars.append(pstr.canon_rep)
 
     @staticmethod
     def nonzero_fourier(pstr: PauliString, n: int) -> bool:
@@ -182,16 +189,6 @@ class IsingCompiler:
             self.psd_blocks.append(psd)
 
     def _hamil_comm(self, pstr: PauliString) -> PauliOperator:
-        if not hasattr(self, '_hamil_terms_by_site'):
-            self._hamil_terms_by_site = [[] for _ in range(self.L)]
-            for hstr, hcoeff in self.hamil_op.terms.items():
-                support = hstr.mask
-                while support:
-                    bit = support & -support
-                    site = (bit.bit_length() - 1) // 2
-                    support &= ~(3 << (2*site))
-                    self._hamil_terms_by_site[site].append((hstr, hcoeff))
-
         op = PauliOperator()
         seen = set()
         support = pstr.mask
@@ -200,30 +197,111 @@ class IsingCompiler:
             site = (bit.bit_length() - 1) // 2
             support &= ~(3 << (2*site))
 
-            for hstr, hcoeff in self._hamil_terms_by_site[site]:
+            for h_sites, hstr, hcoeff in self._hamil_terms_at_site[site]:
                 if hstr.mask in seen:
                     continue
                 seen.add(hstr.mask)
 
                 anticomm = 0
-                h_support = hstr.mask
-                while h_support:
-                    h_bit = h_support & -h_support
-                    h_site = (h_bit.bit_length() - 1) // 2
-                    h_support &= ~(3 << (2*h_site))
-
-                    h_code = (hstr.mask >> (2*h_site)) & 3
+                phase_power = 0
+                for h_site, h_code in h_sites:
                     p_code = (pstr.mask >> (2*h_site)) & 3
                     if p_code != 0 and p_code != h_code:
                         anticomm ^= 1
+                    phase_power += _PAULI_MUL_PHASE_POWER[h_code][p_code]
 
                 if anticomm:
-                    prod, phase = hstr.mul(pstr)
-                    op.add(prod, 2 * hcoeff * phase)
+                    prod = PauliString(self.L, hstr.mask ^ pstr.mask)
+                    op.add(prod, 2 * hcoeff * _PAULI_PHASE[phase_power & 3])
         return op
+
+    def _compile_hamil_ward(self, pstr: PauliString) -> LinearExpr | None:
+        expr = {}
+        seen = set()
+        support = pstr.mask
+        while support:
+            bit = support & -support
+            site = (bit.bit_length() - 1) // 2
+            support &= ~(3 << (2*site))
+
+            for h_sites, hstr, hcoeff in self._hamil_terms_at_site[site]:
+                if hstr.mask in seen:
+                    continue
+                seen.add(hstr.mask)
+
+                anticomm = 0
+                phase_power = 0
+                for h_site, h_code in h_sites:
+                    p_code = (pstr.mask >> (2*h_site)) & 3
+                    if p_code != 0 and p_code != h_code:
+                        anticomm ^= 1
+                    phase_power += _PAULI_MUL_PHASE_POWER[h_code][p_code]
+
+                # given K-odd pstr and K-even hstr, hstr*pstr carries one net i phase if they anticommute.
+                # so the resulting hermitian Pauli string prod must be K-even.
+                if not anticomm:
+                    continue
+
+                prod = PauliString(self.L, hstr.mask ^ pstr.mask)
+                key = prod.canon
+                if key not in self.var_index:
+                    return None
+
+                idx = self.var_index[key]
+                expr[idx] = expr.get(idx, 0) + 2 * hcoeff * _PAULI_PHASE[phase_power & 3]
+                if expr[idx] == 0:
+                    del expr[idx]
+
+        return LinearExpr(terms=expr, const=0)
+
+    def _add_hamil_wards(self):
+        r'''
+            add all representable stationarity Ward identities <[H, O]> == 0
+            found from the existing K-even PSD variable set.
+
+            as explicitly ensured in this function,
+            non-trivial stationarity constraints come from K-odd O.
+        '''
+        seen_masks = set()
+        seen_keys = set()
+        for pstr in self.vars:
+            support = pstr.mask
+            while support:
+                bit = support & -support
+                site = (bit.bit_length() - 1) // 2
+                support &= ~(3 << (2*site))
+
+                for h_sites, hstr, _ in self._hamil_terms_at_site[site]:
+                    anticomm = 0
+                    for h_site, h_code in h_sites:
+                        p_code = (pstr.mask >> (2*h_site)) & 3
+                        if p_code != 0 and p_code != h_code:
+                            anticomm ^= 1
+
+                    # since both SDP variable pstr and hstr are K-even,
+                    # anticommutation makes the candidate mask, i.e. mask = pstr.mask ^ hstr.mask, K-odd.
+                    if not anticomm:
+                        continue
+
+                    mask = pstr.mask ^ hstr.mask
+                    if mask in seen_masks:
+                        continue
+                    seen_masks.add(mask)
+
+                    cand = PauliString(self.L, mask)
+                    expr = self._compile_hamil_ward(cand)
+                    if expr is None or not expr.terms:
+                        continue
+                    key = cand.canon
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    self.affines.add(expr)
+                    self.ward_ops['hamil'] += 1
 
     def _build_affines(self):
         self.affines = AffineConstraints(n_vars=len(self.vars))
+        self.ward_ops = {'hamil': 0}
 
         # normalization constraint, <I> == 1
         id_key = PauliString.from_str('I'*self.L).canon
@@ -231,13 +309,9 @@ class IsingCompiler:
             raise ValueError('current basis cannot represent the identity operator')
         self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
 
-        for pstr in self.ward_moments:
-            expr = self._compile_expr(self._hamil_comm(pstr))
-            if expr is None:
-                continue
-            self.affines.add(expr)
+        self._add_hamil_wards()
 
-        self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-10)
+        self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-12)
 
     def _compile_expr(self, op: PauliOperator) -> LinearExpr | None:
         expr = {}
@@ -259,7 +333,7 @@ class IsingCompiler:
             if pstr.L != self.L:
                 raise ValueError('Pauli string length inconsistent with system size L')
 
-        self._build_moments()
+        self._build_vars()
         self._build_block_reprs()
         self._build_psd()
         
@@ -313,7 +387,7 @@ class IsingCompiler:
             'params': self.params,
             'basis_reprs': len(self.basis_reprs),
             'vars': len(self.vars),
-            'ward_moments': len(self.ward_moments),
+            'ward_ops': self.ward_ops,
             'psd_blocks': len(self.psd_blocks),
             'psd_dims_sum': sum(psd.dim for psd in self.psd_blocks),
             'psd_dims': [psd.dim for psd in self.psd_blocks],

@@ -74,6 +74,18 @@ class PauliString:
     def translate(self, shift: int):
         return PauliString(self.L, self._rotate_l(self.mask, shift))
 
+    def invert(self):
+        # lattice inversion i <-> -i mod L
+        mask = 0
+        support = self.mask
+        while support:
+            bit = support & -support
+            site = (bit.bit_length() - 1) // 2
+            code = (self.mask >> (2*site)) & 3
+            mask |= code << (2*((-site) % self.L))
+            support &= ~(3 << (2*site))
+        return PauliString(self.L, mask)
+
     def permute(self, perm: tuple[str, str, str]):
         code_map = {1: _PAULI_CODE[perm[0]], 3: _PAULI_CODE[perm[1]], 2: _PAULI_CODE[perm[2]]}
         mask = 0
