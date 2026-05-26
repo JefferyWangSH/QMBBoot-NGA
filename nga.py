@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field, fields
-from functools import cache
 import math
 import time
 
@@ -79,9 +78,8 @@ class NGARunner:
 
         Required model interfaces:
 
-            BasisRep.canon
-            BasisRep.canon_rep
-
+            Compiler.trans_canon
+            Compiler.trans_canon_rep
             Compiler.block_reprs: list[list[BasisRep]]
             Compiler.psd_blocks: list[PSDConstraints]
             Compiler.vars: list
@@ -104,15 +102,16 @@ class NGARunner:
         self.basis_reprs = []
         reprs_seen = set()
         for rep in basis_reprs:
-            rep = rep.canon_rep
-            if rep.canon in reprs_seen:
+            rep = self._canon_rep(rep)
+            key = self._canon(rep)
+            if key in reprs_seen:
                 continue
-            reprs_seen.add(rep.canon)
+            reprs_seen.add(key)
             self.basis_reprs.append(rep)
 
-        self.basis_indices = {rep.canon: idx for idx, rep in enumerate(self.basis_reprs)}
-        self.required_basis_reprs = [rep.canon_rep for rep in required_basis_reprs]
-        self.required_keys = {rep.canon for rep in self.required_basis_reprs}
+        self.basis_indices = {self._canon(rep): idx for idx, rep in enumerate(self.basis_reprs)}
+        self.required_basis_reprs = [self._canon_rep(rep) for rep in required_basis_reprs]
+        self.required_keys = {self._canon(rep) for rep in self.required_basis_reprs}
         if self.required_keys - set(self.basis_indices):
             raise ValueError('required basis representatives must be included in basis_reprs')
 
@@ -133,12 +132,18 @@ class NGARunner:
     def _reset_record(self):
         nga_params_record = self.nga_params.to_dict()
         nga_params_record['required_basis_reprs'] = [
-            str(rep.canon_rep) for rep in self.required_basis_reprs
+            str(self._canon_rep(rep)) for rep in self.required_basis_reprs
         ]
         self.record = NGARecord(
             basis_reps = len(self.basis_reprs),
             nga_params = nga_params_record,
         )
+
+    def _canon(self, basis_rep):
+        return self.compiler.trans_canon(basis_rep)
+
+    def _canon_rep(self, basis_rep):
+        return self.compiler.trans_canon_rep(basis_rep)
 
     def build(self):
         start = time.perf_counter()
@@ -200,7 +205,7 @@ class NGARunner:
             block_leverage = np.sum(np.abs(eigvecs[:, null_mask])**2, axis=1)
             null_eigvals.extend(eigvals[null_mask])
             for rep, score in zip(block_reprs, block_leverage):
-                idx = self.basis_indices[rep.canon]
+                idx = self.basis_indices[self._canon(rep)]
                 leverage[idx] += float(score)
 
         null_count = len(null_eigvals)
@@ -214,9 +219,9 @@ class NGARunner:
         max_null_eigval = float(np.max(null_eigvals)) if null_eigvals else None
 
         cands = [
-            (score, rep.canon)
+            (score, self._canon(rep))
             for rep, score in zip(self.basis_reprs, leverage)
-            if rep.canon not in self.required_keys
+            if self._canon(rep) not in self.required_keys
             and score < self.nga_params.max_drop_leverage
         ]
         # sorted by leverages in nullspace (ascending)
@@ -230,14 +235,6 @@ class NGARunner:
         self.record.drop_null_count = null_count
         self.record.max_drop_null_eigval = max_null_eigval
         return self.to_drop
-
-    @cache
-    def _descendants(self, rep):
-        r'''
-            calculate C_a = [H, O_a(0)] = \sum_{b,s} C_{ab}(s) T_s O'(0)_b
-            as entry list [(O'(0)_b, s, C_{ab}(s)), ...]
-        '''
-        return self.compiler.descendants(rep)
 
     def proposed_grow(self):
         if not self.psd_eigvals or not self.psd_eigvecs:
@@ -283,10 +280,17 @@ class NGARunner:
             cols = []
             data = []
 
-            # sparse descendant matrix D_{ba}(k) = \sum_s C_{ab}(s) e^{iks}
+            r'''
+                sparse descendant matrix D_{ba}(k) = \sum_s C_{ab}(s) e^{iks}
+                self.compiler.descendants(rep) calculates
+
+                    C_a = [H, O_a(0)] = \sum_{b,s} C_{ab}(s) T_s O'(0)_b
+
+                as entry list [(O'(0)_b, s, C_{ab}(s)), ...]
+            '''
             for a_idx, rep in enumerate(block_reprs):
-                for desc_rep, s, coeff in self._descendants(rep):
-                    desc_key = desc_rep.canon
+                for desc_rep, s, coeff in self.compiler.descendants(rep):
+                    desc_key = self._canon(desc_rep)
                     if desc_key in basis_keys:
                         continue
                     if not self.compiler.nonzero_fourier(desc_rep, n):
@@ -340,9 +344,9 @@ class NGARunner:
         to_drop_set = set(self.to_drop)
         for key in to_drop_set:
             self.drop_counts[key] = self.drop_counts.get(key, 0) + 1
-        self.basis_reprs = [rep for rep in self.basis_reprs if rep.canon not in to_drop_set]
+        self.basis_reprs = [rep for rep in self.basis_reprs if self._canon(rep) not in to_drop_set]
         self.basis_reprs.extend(self.to_grow)
-        self.basis_indices = {rep.canon: idx for idx, rep in enumerate(self.basis_reprs)}
+        self.basis_indices = {self._canon(rep): idx for idx, rep in enumerate(self.basis_reprs)}
 
         self.record.to_drop = len(self.to_drop)
         self.record.to_grow = len(self.to_grow)

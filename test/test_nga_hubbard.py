@@ -12,7 +12,7 @@ if __name__ == '__main__':
         max_diameter=0,
     )
     required_basis_reprs = [
-        MajoranaMonomial.from_str(params.L, monomial)
+        MajoranaMonomial.from_str(params.L, monomial).trans_canon_rep
         for monomial in ['I', '0u+', '0u-', '0u+ 0u-', '0d+', '0d-', '0d+ 0d-']
     ]
 
@@ -30,7 +30,8 @@ if __name__ == '__main__':
             grow_null_tol=1e-6,
             max_drop_leverage=5e-2,
             min_net_growth_per_step=1,
-            max_net_growth_per_step=8,
+            net_growth_cap_base_per_step=8,
+            net_growth_cap_rate=0,
             drop_cap_base_per_step=8,
             drop_cap_rate=0.15,
         ),

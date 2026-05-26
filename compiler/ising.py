@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from functools import cache
 import numpy as np
 import scipy as sp
 
@@ -111,6 +112,30 @@ class IsingCompiler:
             for site, _ in h_sites:
                 self._hamil_terms_at_site[site].append((h_sites, h_mask, h_coeff))
 
+    @cache
+    def _trans_cache(self, mask: int) -> int:
+        return PauliString(self.L, mask).trans_canon
+
+    def trans_canon(self, pstr: PauliString) -> int:
+        return self._trans_cache(pstr.mask)
+
+    def trans_canon_rep(self, pstr: PauliString) -> PauliString:
+        return PauliString(L=self.L, mask=self.trans_canon(pstr))
+
+    @cache
+    def _sym_cache(self, mask: int) -> int:
+        return PauliString(self.L, mask).trans_canon
+
+    def _sym_canon(self, pstr: PauliString) -> int:
+        return self._sym_cache(pstr.mask)
+
+    @cache
+    def _sym_allowed_cache(self, mask: int) -> bool:
+        return PauliString(self.L, mask).parity() == 1
+
+    def _sym_allowed(self, pstr: PauliString) -> bool:
+        return self._sym_allowed_cache(pstr.mask)
+
     def _build_vars(self):
         '''
             build K-even SDP variables
@@ -133,11 +158,11 @@ class IsingCompiler:
                 pstr1r = pstr1.translate(r)
                 for pstr2 in self.basis_reprs:
                     pstr, _ = pstr1r.dag().mul(pstr2)
-                    key = pstr.canon
+                    key = self._sym_canon(pstr)
 
-                    if pstr.parity() == 1 and key not in self.var_index:
+                    if self._sym_allowed(pstr) and key not in self.var_index:
                         self.var_index[key] = len(self.vars)
-                        self.vars.append(pstr.canon_rep)
+                        self.vars.append(self.trans_canon_rep(pstr))
 
     @staticmethod
     def nonzero_fourier(pstr: PauliString, n: int) -> bool:
@@ -177,10 +202,10 @@ class IsingCompiler:
                     for r in range(self.L):
                         pstr1r = pstr1.translate(r)
                         pstr, phase = pstr1r.dag().mul(pstr2)
-                        if pstr.parity() == -1:
+                        if not self._sym_allowed(pstr):
                             continue
 
-                        idx = self.var_index[pstr.canon]
+                        idx = self.var_index[self._sym_canon(pstr)]
                         coeff = np.exp(1j * k * r) * phase / self.L
                         expr[idx] = expr.get(idx, 0) + coeff
                         if abs(expr[idx]) < 1e-14:
@@ -244,7 +269,7 @@ class IsingCompiler:
                     continue
 
                 prod = PauliString(self.L, h_mask ^ pstr.mask)
-                key = prod.canon
+                key = self._sym_canon(prod)
                 if key not in self.var_index:
                     return None
 
@@ -290,7 +315,7 @@ class IsingCompiler:
                     seen_masks.add(mask)
 
                     cand = PauliString(self.L, mask)
-                    key = cand.canon
+                    key = self._sym_canon(cand)
                     if key in seen_keys:
                         continue
                     seen_keys.add(key)
@@ -306,7 +331,7 @@ class IsingCompiler:
         self.ward_ops = {'hamil': 0}
 
         # normalization constraint, <I> == 1
-        id_key = PauliString.from_str('I'*self.L).canon
+        id_key = self._sym_canon(PauliString.from_str('I'*self.L))
         if id_key not in self.var_index:
             raise ValueError('current basis cannot represent the identity operator')
         self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
@@ -318,9 +343,9 @@ class IsingCompiler:
     def _compile_expr(self, op: PauliOperator) -> LinearExpr | None:
         expr = {}
         for pstr, coeff in op.terms.items():
-            key = pstr.canon
+            key = self._sym_canon(pstr)
             if key not in self.var_index:
-                if pstr.parity() == -1:
+                if not self._sym_allowed(pstr):
                     continue
                 return None
             idx = self.var_index[key]
@@ -347,6 +372,10 @@ class IsingCompiler:
         self._build_affines()
 
     def descendants(self, pstr: PauliString):
+        return self._descendants(pstr.mask)
+
+    @cache
+    def _descendants(self, mask: int):
         r'''
             calculate
 
@@ -354,25 +383,26 @@ class IsingCompiler:
 
             as entry list [(O'(0)_b, s, C_{ab}(s)), ...]
         '''
+        pstr = PauliString(self.L, mask)
         entries = {}
         comm_op = self._hamil_comm(pstr)
 
         for desc, coeff in comm_op.terms.items():
-            desc_rep = desc.canon_rep
+            desc_rep = self.trans_canon_rep(desc)
             s = 0
             for shift in range(desc.L):
                 if desc_rep.translate(shift) == desc:
                     s = shift
                     break
 
-            key = (desc_rep, s)
+            key = (desc_rep.mask, s)
             entries[key] = entries.get(key, 0) + coeff
             if entries[key] == 0:
                 del entries[key]
 
         return [
-            (desc_rep, s, coeff)
-            for (desc_rep, s), coeff in entries.items()
+            (PauliString(self.L, desc_mask), s, coeff)
+            for (desc_mask, s), coeff in entries.items()
         ]
 
     def _get_expr_str(self, expr: LinearExpr) -> str:
@@ -422,7 +452,7 @@ if __name__ == '__main__':
     # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
     pstr1 = PauliString.from_str(pstr='IXYZZZII')
     pstr2 = PauliString.from_str(pstr='ZZZIIIXY')
-    print(pstr1.canon, pstr2.canon)
+    print(pstr1.trans_canon, pstr2.trans_canon)
 
     print(pstr1)
     print(pstr2)

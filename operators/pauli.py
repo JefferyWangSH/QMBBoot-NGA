@@ -13,10 +13,8 @@ _PAULI_MUL_PHASE_POWER = (
 class PauliString:
     L: int
     mask: int # 2L-bit, each site uses I=00, X=01, Z=10, Y=11
-
-    # canonical representation, unique as the translation-invariant representative
-    canon: int
-    canon_rep: 'PauliString'
+    trans_canon: int
+    trans_canon_rep: 'PauliString'
     period: int
 
     def __init__(self, L: int, mask: int = 0):
@@ -52,7 +50,7 @@ class PauliString:
         return ((mask << rot) | (mask >> (2*self.L - rot))) & full
 
     @cached_property
-    def canon(self) -> int:
+    def trans_canon(self) -> int:
         canon = self.mask
         for shift in range(1, self.L):
             cand = self._rotate_l(self.mask, shift)
@@ -61,8 +59,8 @@ class PauliString:
         return canon
 
     @cached_property
-    def canon_rep(self):
-        return PauliString(self.L, self.canon)
+    def trans_canon_rep(self):
+        return PauliString(self.L, self.trans_canon)
 
     @cached_property
     def period(self) -> int:

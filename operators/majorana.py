@@ -2,7 +2,7 @@ from functools import cached_property
 
 class MajoranaMonomial:
     '''
-        spinful Majorana monomial on a length-L PBC chain (canonical ordered).
+        spinful Majorana monomial on a length-L PBC chain (normal ordered).
 
         each site carries 4 Majorana modes packed into a 4-bit nibble:
             bit 0: (site, up, +)
@@ -12,12 +12,12 @@ class MajoranaMonomial:
     '''
     L: int
     mask: int # 4L-bit
-    canon: int
-    canon_sign: int
-    canon_rep: 'MajoranaMonomial'
+    trans_canon: int
+    trans_canon_sign: int
+    trans_canon_rep: 'MajoranaMonomial'
+    _trans_canon_data: tuple[int, int]
     period: int
     period_sign: int
-    _canon_data: tuple[int, int]
     _period_data: tuple[int, int]
 
     def __init__(self, L: int, mask: int = 0):
@@ -71,14 +71,14 @@ class MajoranaMonomial:
         return int(site), spin_map[spin], pm_map[pm]
 
     @classmethod
-    def from_str(cls, L: int, s: str, return_sign: bool = False):
+    def from_str(cls, L: int, s: str, sign: bool = False):
         '''
             build an ordered product by right-multiplying degree-1 monomials from left to right
         '''
         s = s.strip()
         if not s or s == 'I':
             product = cls.identity(L=L)
-            return (product, 1) if return_sign else product
+            return (product, 1) if sign else product
 
         tokens = s.split()
         mask = 0
@@ -90,18 +90,17 @@ class MajoranaMonomial:
                 total_sign = -total_sign
             mask ^= bit
 
-        return (cls(L=L, mask=mask), total_sign) if return_sign else cls(L=L, mask=mask)
+        product = cls(L=L, mask=mask)
+        return (product, total_sign) if sign else product
 
-    def _rotate_l(self, mask: int, shift: int, return_sign: bool = False) -> int | tuple[int, int]:
+    def _rotate_l(self, mask: int, shift: int) -> tuple[int, int]:
         shift %= self.L
         if shift == 0:
-            return (mask, 1) if return_sign else mask
+            return (mask, 1)
 
         full = (1 << (4 * self.L)) - 1
         rot = 4 * shift
         rot_mask = ((mask << rot) | (mask >> (4 * self.L - rot))) & full
-        if not return_sign:
-            return rot_mask
 
         cutoff = 4 * (self.L - shift)
         n_wrap = (mask >> cutoff).bit_count()
@@ -110,38 +109,56 @@ class MajoranaMonomial:
         return rot_mask, sign
 
     def translate(self, shift: int):
-        monomial = MajoranaMonomial.__new__(MajoranaMonomial)
-        monomial.L = self.L
-        monomial.mask = self._rotate_l(self.mask, shift)
-        return monomial
+        mask, sign = self._rotate_l(self.mask, shift)
+        return MajoranaMonomial(L=self.L, mask=mask), sign
+
+    def invert(self):
+        # lattice inversion i <-> -i mod L
+        modes = []
+        support = self.mask
+        while support:
+            bit = support & -support
+            mode = bit.bit_length() - 1
+            site, rem = divmod(mode, 4)
+            modes.append(4*((-site) % self.L) + rem)
+            support ^= bit
+
+        swaps = 0
+        for i, mode_i in enumerate(modes):
+            for mode_j in modes[i+1:]:
+                swaps += int(mode_i > mode_j)
+
+        mask = sum(1 << mode for mode in modes)
+        monomial = MajoranaMonomial(L=self.L, mask=mask)
+        return monomial, (-1 if swaps & 1 else 1)
 
     @cached_property
-    def _canon_data(self) -> tuple[int, int]:
+    def _trans_canon_data(self) -> tuple[int, int]:
         canon = self.mask
-        sign = 1
+        canon_sign = 1
         for shift in range(1, self.L):
-            cand, cand_sign = self._rotate_l(self.mask, shift, return_sign=True)
+            cand, cand_sign = self._rotate_l(self.mask, shift)
             if cand < canon:
                 canon = cand
-                sign = cand_sign
-        return canon, sign
+                canon_sign = cand_sign
+        return canon, canon_sign
 
     @cached_property
-    def canon(self) -> int:
-        return self._canon_data[0]
+    def trans_canon(self) -> int:
+        return self._trans_canon_data[0]
 
     @cached_property
-    def canon_sign(self) -> int:
-        return self._canon_data[1]
+    def trans_canon_sign(self) -> int:
+        return self._trans_canon_data[1]
 
     @cached_property
-    def canon_rep(self):
-        return MajoranaMonomial(L=self.L, mask=self.canon)
+    def trans_canon_rep(self):
+        return MajoranaMonomial(L=self.L, mask=self.trans_canon)
 
     @cached_property
     def _period_data(self) -> tuple[int, int]:
         for shift in range(1, self.L):
-            mask, sign = self._rotate_l(self.mask, shift, return_sign=True)
+            mask, sign = self._rotate_l(self.mask, shift)
             if mask == self.mask:
                 return shift, sign
         return self.L, 1

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from functools import cache
 import itertools
 import numpy as np
 import scipy as sp
@@ -40,8 +41,6 @@ class HeisenbergCompiler:
     var_cpx: bool = False
     var_index: dict[int, int]
     vars: list[PauliString]
-    _is_var_cache: dict[int, bool]
-    _sym_canon_cache: dict[int, int]
 
     ward_ops: dict[str, int]
 
@@ -60,8 +59,6 @@ class HeisenbergCompiler:
     def __init__(self, params: HeisenbergParams):
         self.L = params.L
         self.params = params
-        self._is_var_cache = {}
-        self._sym_canon_cache = {}
         self.ward_ops = {'hamil': 0, 'Sx': 0, 'Sy': 0, 'Sz': 0}
 
         self.hamil_op = build_hamil(params)
@@ -81,27 +78,40 @@ class HeisenbergCompiler:
             self._hamil_terms_at_site[site1].append((site2, code1, h_mask, h_coeff))
             self._hamil_terms_at_site[site2].append((site1, code2, h_mask, h_coeff))
 
-    def _is_var(self, pstr: PauliString):
-        if pstr.mask not in self._is_var_cache:
-            # vars must have sign charge 000, which is definitely also K-even.
-            self._is_var_cache[pstr.mask] = pstr.sign_charge() == (0, 0, 0)
-        return self._is_var_cache[pstr.mask]
+    @cache
+    def _trans_cache(self, mask: int) -> int:
+        return PauliString(self.L, mask).trans_canon
 
-    def _is_zero(self, pstr: PauliString):
-        return not self._is_var(pstr)
+    def trans_canon(self, pstr: PauliString) -> int:
+        return self._trans_cache(pstr.mask)
 
-    def _sym_canon(self, pstr: PauliString):
-        if pstr.mask in self._sym_canon_cache:
-            return self._sym_canon_cache[pstr.mask]
+    def trans_canon_rep(self, pstr: PauliString) -> PauliString:
+        return PauliString(L=self.L, mask=self.trans_canon(pstr))
+
+    def _sym_canon(self, pstr: PauliString) -> int:
+        if not hasattr(self, '_sym_cache'):
+            self._sym_cache = {}
+        if pstr.mask in self._sym_cache:
+            return self._sym_cache[pstr.mask]
 
         orbit = []
         for base in (pstr, pstr.invert()):
             for perm in itertools.permutations('XYZ'):
                 orbit.append(base.permute(perm))
-        key = min(rep.canon for rep in orbit)
+
+        # permutations commute with translation, and inversion maps T_s to T_-s,
+        # so taking trans_canon after each inversion/S3 image covers the full orbit.
+        key = min(rep.trans_canon for rep in orbit)
         for rep in orbit:
-            self._sym_canon_cache[rep.mask] = key
+            self._sym_cache[rep.mask] = key
         return key
+
+    @cache
+    def _sym_allowed_cache(self, mask: int) -> bool:
+        return PauliString(self.L, mask).sign_charge() == (0, 0, 0)
+
+    def _sym_allowed(self, pstr: PauliString) -> bool:
+        return self._sym_allowed_cache(pstr.mask)
 
     def _build_vars(self):
         self.vars = []
@@ -113,7 +123,7 @@ class HeisenbergCompiler:
                 for pstr2 in self.basis_reprs:
                     pstr, _ = pstr1r.dag().mul(pstr2)
 
-                    if self._is_var(pstr):
+                    if self._sym_allowed(pstr):
                         key = self._sym_canon(pstr)
                         if key not in self.var_index:
                             self.var_index[key] = len(self.vars)
@@ -152,7 +162,7 @@ class HeisenbergCompiler:
                     for r in range(self.L):
                         pstr1r = pstr1.translate(r)
                         pstr, phase = pstr1r.dag().mul(pstr2)
-                        if self._is_zero(pstr):
+                        if not self._sym_allowed(pstr):
                             continue
 
                         idx = self.var_index[self._sym_canon(pstr)]
@@ -264,7 +274,10 @@ class HeisenbergCompiler:
                     seen_masks.add(mask)
 
                     cand = PauliString(self.L, mask)
-                    key = cand.canon
+                    # translation/inversion/S3-related O's give redundant Ward identities
+                    # that are also related by symmetry operations.
+                    # full _sym_canon would dedupe them, but it is too costly here.
+                    key = self.trans_canon(cand)
                     if key in seen_keys:
                         continue
                     seen_keys.add(key)
@@ -310,7 +323,7 @@ class HeisenbergCompiler:
 
             mask = (pstr.mask & ~(3 << (2 * site))) | ((axis_code ^ p_code) << (2 * site))
             prod = PauliString(self.L, mask)
-            if self._is_zero(prod):
+            if not self._sym_allowed(prod):
                 continue
             prod_key = self._sym_canon(prod)
             if prod_key not in self.var_index:
@@ -360,7 +373,10 @@ class HeisenbergCompiler:
                     ward_axis = _AXIS_BY_CHARGE.get(cand.sign_charge())
                     if ward_axis is None:
                         continue
-                    key = cand.canon
+                    # translation/inversion/S3-related O's give redundant Ward identities
+                    # that are also related by symmetry operations.
+                    # full _sym_canon would dedupe them, but it is too costly here.
+                    key = self.trans_canon(cand)
                     if key in seen_keys:
                         continue
                     seen_keys.add(key)
@@ -392,7 +408,7 @@ class HeisenbergCompiler:
     def _compile_expr(self, op: PauliOperator) -> LinearExpr | None:
         expr = {}
         for pstr, coeff in op.terms.items():
-            if self._is_zero(pstr):
+            if not self._sym_allowed(pstr):
                 continue
             key = self._sym_canon(pstr)
             if key not in self.var_index:
@@ -420,25 +436,30 @@ class HeisenbergCompiler:
         self._build_affines()
 
     def descendants(self, pstr: PauliString):
+        return self._descendants(pstr.mask)
+
+    @cache
+    def _descendants(self, mask: int):
+        pstr = PauliString(self.L, mask)
         entries = {}
         comm_op = self._hamil_comm(pstr)
 
         for desc, coeff in comm_op.terms.items():
-            desc_rep = desc.canon_rep
+            desc_rep = self.trans_canon_rep(desc)
             s = 0
             for shift in range(desc.L):
                 if desc_rep.translate(shift) == desc:
                     s = shift
                     break
 
-            key = (desc_rep, s)
+            key = (desc_rep.mask, s)
             entries[key] = entries.get(key, 0) + coeff
             if entries[key] == 0:
                 del entries[key]
 
         return [
-            (desc_rep, s, coeff)
-            for (desc_rep, s), coeff in entries.items()
+            (PauliString(self.L, desc_mask), s, coeff)
+            for (desc_mask, s), coeff in entries.items()
         ]
 
     def _get_expr_str(self, expr: LinearExpr) -> str:

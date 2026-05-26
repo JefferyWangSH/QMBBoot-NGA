@@ -32,7 +32,7 @@ class ModelAdapter:
             from operators.majorana import MajoranaMonomial
             model_params = HubbardParams(**model_config)
             compiler = HubbardCompiler(model_params)
-            parse_basis = lambda strings: [MajoranaMonomial.from_str(model_params.L, s).canon_rep for s in strings]
+            parse_basis = lambda strings: [MajoranaMonomial.from_str(model_params.L, s).trans_canon_rep for s in strings]
             initial_basis = lambda initial: parse_basis(initial) if isinstance(initial, list) else build_basis_reprs(model_params.L, **initial)
             required_basis = parse_basis(basis_config['required'])
 
@@ -69,12 +69,13 @@ class ModelAdapter:
             drop_counts = {}
             for step_event in events.get('steps', []):
                 for rep in parse_basis(step_event.get('drop', [])):
-                    drop_counts[rep.canon] = drop_counts.get(rep.canon, 0) + 1
+                    key = rep.trans_canon
+                    drop_counts[key] = drop_counts.get(key, 0) + 1
         else:
             basis = initial_basis(basis_config['initial'])
             start_step, records = 0, []
             events = {
-                'initial_basis': [str(rep.canon_rep) for rep in basis],
+                'initial_basis': [str(rep.trans_canon_rep) for rep in basis],
                 'steps': [],
             }
             drop_counts = {}
@@ -82,7 +83,7 @@ class ModelAdapter:
         return cls(model_type, model_params, compiler, nga_params, basis, required_basis, start_step, records, events, drop_counts)
 
     def get_basis_rep(self, key):
-        return type(self.basis[0])(self.model_params.L, key).canon_rep
+        return type(self.basis[0])(self.model_params.L, key).trans_canon_rep
 
 
 if __name__ == '__main__':
@@ -118,7 +119,7 @@ if __name__ == '__main__':
         events['steps'].append({
             'step': step,
             'drop': [str(adapter.get_basis_rep(key)) for key in runner.to_drop],
-            'grow': [str(rep.canon_rep) for rep in runner.to_grow],
+            'grow': [str(rep.trans_canon_rep) for rep in runner.to_grow],
         })
         record = record.to_dict()
         records.append(record)
@@ -138,7 +139,7 @@ if __name__ == '__main__':
 
         output_basis.parent.mkdir(parents=True, exist_ok=True)
         output_basis.write_text(
-            json.dumps([str(rep.canon_rep) for rep in runner.basis_reprs], indent=2)
+            json.dumps([str(rep.trans_canon_rep) for rep in runner.basis_reprs], indent=2)
         )
 
         print(

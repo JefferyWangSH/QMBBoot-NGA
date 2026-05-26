@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from functools import cache
 import itertools
 import numpy as np
 import scipy as sp
@@ -24,23 +25,17 @@ def build_hamil(params: HubbardParams):
         xp1 = (x+1) % params.L
         for spin in ('u', 'd'):
             monomial, sign = MajoranaMonomial.from_str(
-                L=params.L,
-                s=f'{x}{spin}+ {xp1}{spin}-',
-                return_sign=True,
+                L=params.L, s=f'{x}{spin}+ {xp1}{spin}-', sign=True
             )
             hamil_op.add(monomial, -.5j * params.t * sign / params.L)
 
             monomial, sign = MajoranaMonomial.from_str(
-                L=params.L,
-                s=f'{x}{spin}- {xp1}{spin}+',
-                return_sign=True,
+                L=params.L, s=f'{x}{spin}- {xp1}{spin}+', sign=True
             )
             hamil_op.add(monomial, .5j * params.t * sign / params.L)
 
         monomial, sign = MajoranaMonomial.from_str(
-            L=params.L,
-            s=f'{x}u+ {x}u- {x}d+ {x}d-',
-            return_sign=True,
+            L=params.L, s=f'{x}u+ {x}u- {x}d+ {x}d-', sign=True
         )
         hamil_op.add(monomial, -.25 * params.U * sign / params.L)
 
@@ -55,9 +50,7 @@ def build_number(params: HubbardParams, spin: str|None = None):
         number_op.add(MajoranaMonomial.identity(params.L), .5)
         for x in range(params.L):
             monomial, sign = MajoranaMonomial.from_str(
-                L=params.L,
-                s=f'{x}{s}+ {x}{s}-',
-                return_sign=True,
+                L=params.L, s=f'{x}{s}+ {x}{s}-', sign=True
             )
             number_op.add(monomial, .5j * sign / params.L)
     return number_op
@@ -72,11 +65,10 @@ class HubbardCompiler:
     block_momenta: list[int]
 
     # SDP variables are real expectations of
-    # hermitianized Majorana monomials with even fermion parity
+    # hermitianized Majorana monomials with even fermion parity and odd K parity
     var_cpx: bool = False
     var_index: dict[int, int]
     vars: list[MajoranaMonomial]
-    _is_var_cache: dict[int, bool]
 
     ward_ops: dict[str, int]
 
@@ -96,7 +88,6 @@ class HubbardCompiler:
         self.L = params.L
         self.params = params
         self.n_particles = params.n_particles
-        self._is_var_cache = {}
         self.ward_ops = {'hamil': 0, 'Nu': 0, 'Nd': 0}
 
         self.hamil_op = build_hamil(params)
@@ -122,6 +113,48 @@ class HubbardCompiler:
         self.number_dn_op = build_number(params, spin='d')
         self.number_op = self.number_up_op + self.number_dn_op
 
+    @cache
+    def _trans_cache(self, mask: int) -> tuple[int, int]:
+        monomial = MajoranaMonomial(self.L, mask)
+        return monomial.trans_canon, monomial.trans_canon_sign
+
+    def trans_canon(self, monomial: MajoranaMonomial) -> int:
+        canon, _ = self._trans_cache(monomial.mask)
+        return canon
+
+    def trans_canon_rep(self, monomial: MajoranaMonomial) -> MajoranaMonomial:
+        return MajoranaMonomial(self.L, self.trans_canon(monomial))
+
+    @cache
+    def _sym_cache(self, mask: int) -> tuple[int, int] | None:
+        monomial = MajoranaMonomial(self.L, mask)
+        if monomial.period_sign == -1:
+            return None
+        return monomial.trans_canon, monomial.trans_canon_sign
+
+    def _sym_canon(self, monomial: MajoranaMonomial, sign: bool = False) -> int | tuple[int, int] | None:
+        canon = self._sym_cache(monomial.mask)
+        if canon is None:
+            return None
+
+        if sign:
+            return canon
+        return canon[0]
+
+    @cache
+    def _sym_allowed_cache(self, mask: int) -> bool:
+        '''
+            SDP variables should have even fermion parity and even K parity.
+        '''
+        monomial = MajoranaMonomial(self.L, mask)
+        return (
+            monomial.fermion_parity() == 1
+            and monomial.k_parity(hermitian=True) == 1
+        )
+
+    def _sym_allowed(self, monomial: MajoranaMonomial) -> bool:
+        return self._sym_allowed_cache(monomial.mask)
+
     @staticmethod
     def _moment(monomial1: MajoranaMonomial, monomial2: MajoranaMonomial) -> tuple[MajoranaMonomial, complex]:
         r'''
@@ -129,29 +162,6 @@ class HubbardCompiler:
         '''
         monomial, sign = monomial1.mul(monomial2)
         return monomial, sign * monomial1.dag_phase()
-
-    @staticmethod
-    def _translation_pruned(monomial):
-        # check if there exists r such that T^\dag(r) O T(r) = -O
-        return monomial.period_sign == -1
-
-    def _is_var(self, monomial):
-        '''
-            SDP variables should have even fermion parity and even K parity
-            specially, monomials with negative period sign have zero expectation values
-            when translation invariance is assumed, and should not be SDP variables.
-        '''
-        mask = monomial.mask
-        if mask not in self._is_var_cache:
-            self._is_var_cache[mask] = (
-                monomial.fermion_parity() == 1
-                and not self._translation_pruned(monomial)
-                and monomial.k_parity(hermitian=True) == 1
-            )
-        return self._is_var_cache[mask]
-
-    def _is_zero(self, monomial):
-        return not self._is_var(monomial)
 
     def _build_vars(self):
         '''
@@ -162,12 +172,14 @@ class HubbardCompiler:
 
         for monomial1 in self.basis_reprs:
             for r in range(self.L):
-                monomial1r = monomial1.translate(r)
+                monomial1r, _ = monomial1.translate(r)
                 for monomial2 in self.basis_reprs:
                     monomial, _ = self._moment(monomial1r, monomial2)
 
-                    if self._is_var(monomial):
-                        key = monomial.canon
+                    if self._sym_allowed(monomial):
+                        key = self._sym_canon(monomial)
+                        if key is None:
+                            continue
                         if key not in self.var_index:
                             self.var_index[key] = len(self.vars)
                             self.vars.append(MajoranaMonomial(L=self.L, mask=key))
@@ -207,13 +219,15 @@ class HubbardCompiler:
                 for col, monomial2 in enumerate(block_basis):
                     expr = {}
                     for r in range(self.L):
-                        rot_mask, rot_sign = monomial1._rotate_l(monomial1.mask, r, return_sign=True)
-                        monomial1r = MajoranaMonomial(L=self.L, mask=rot_mask)
+                        monomial1r, rot_sign = monomial1.translate(r)
                         monomial, mul_sign = self._moment(monomial1r, monomial2)
 
-                        if self._is_zero(monomial):
+                        if not self._sym_allowed(monomial):
                             continue
-                        key, canon_sign = monomial.canon, monomial.canon_sign
+                        canon = self._sym_canon(monomial, sign=True)
+                        if canon is None:
+                            continue
+                        key, canon_sign = canon
 
                         # combine Fourier phase, translation/multiplication/canonical signs,
                         # then divide by the hermitian phase so moment variables stay real.
@@ -278,12 +292,12 @@ class HubbardCompiler:
                     seen_masks.add(mask)
 
                     cand = MajoranaMonomial(self.L, mask)
-                    key = cand.canon
+                    key = self._sym_canon(cand)
+                    if key is None:
+                        continue
                     if key in seen_keys:
                         continue
                     seen_keys.add(key)
-                    if self._translation_pruned(cand):
-                        continue
 
                     expr = self._compile_expr(self._hamil_comm(cand))
                     if expr is None or not expr.terms:
@@ -352,12 +366,12 @@ class HubbardCompiler:
                 seen_masks.add(mask)
 
                 cand = MajoranaMonomial(self.L, mask)
-                key = cand.canon
+                key = self._sym_canon(cand)
+                if key is None:
+                    continue
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
-                if self._translation_pruned(cand):
-                    continue
 
                 expr = self._compile_expr(self._number_comm(cand, spin))
                 if expr is None or not expr.terms:
@@ -370,7 +384,7 @@ class HubbardCompiler:
         for key in self.ward_ops:
             self.ward_ops[key] = 0
 
-        id_key = MajoranaMonomial.identity(self.L).canon
+        id_key = self._sym_canon(MajoranaMonomial.identity(self.L))
         if id_key not in self.var_index:
             raise ValueError('current basis cannot represent the identity operator')
         self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
@@ -400,9 +414,12 @@ class HubbardCompiler:
     def _compile_expr(self, op: MajoranaOperator) -> LinearExpr | None:
         expr = {}
         for monomial, coeff in op.terms.items():
-            if self._is_zero(monomial):
+            if not self._sym_allowed(monomial):
                 continue
-            key, sign = monomial.canon, monomial.canon_sign
+            canon = self._sym_canon(monomial, sign=True)
+            if canon is None:
+                continue
+            key, sign = canon
             if key not in self.var_index:
                 return None
             idx = self.var_index[key]
@@ -427,6 +444,10 @@ class HubbardCompiler:
         self._build_affines()
 
     def descendants(self, monomial: MajoranaMonomial):
+        return self._descendants(monomial.mask)
+
+    @cache
+    def _descendants(self, mask: int):
         r'''
             calculate
 
@@ -434,26 +455,27 @@ class HubbardCompiler:
 
             as entry list [(O'(0)_b, s, C_{ab}(s)), ...]
         '''
+        monomial = MajoranaMonomial(L=self.L, mask=mask)
         entries = {}
         comm_op = self._hamil_comm(monomial)
 
         for desc, coeff in comm_op.terms.items():
-            desc_rep = desc.canon_rep
+            desc_rep = self.trans_canon_rep(desc)
             s, s_sign = 0, 1
             for shift in range(desc.L):
-                mask, sign = desc_rep._rotate_l(desc_rep.mask, shift, return_sign=True)
-                if mask == desc.mask:
+                shifted, sign = desc_rep.translate(shift)
+                if shifted.mask == desc.mask:
                     s, s_sign = shift, sign
                     break
 
-            key = (desc_rep.canon, s)
+            key = (desc_rep.mask, s)
             entries[key] = entries.get(key, 0) + coeff * s_sign
             if entries[key] == 0:
                 del entries[key]
 
         return [
-            (MajoranaMonomial(L=monomial.L, mask=desc_canon), s, coeff)
-            for (desc_canon, s), coeff in entries.items()
+            (MajoranaMonomial(L=self.L, mask=desc_mask), s, coeff)
+            for (desc_mask, s), coeff in entries.items()
         ]
 
     def _get_expr_str(self, expr: LinearExpr) -> str:
@@ -550,19 +572,17 @@ if __name__ == '__main__':
     print(m1.mask)
     print(m1.dag_phase())
     print(m1.translate(1))
-    print(m1.canon)
+    print(m1.invert())
 
     print(*m1.mul(m2))
     print(*m2.mul(m1))
     print(*m1.mul(m1))
 
-    op1 = MajoranaOperator({
-        MajoranaMonomial.from_str(L=8, s='0u+ 1u+'): 1,
-        MajoranaMonomial.from_str(L=8, s='0d+ 0d-'): 2,
-    })
-    op2 = MajoranaOperator({
-        MajoranaMonomial.from_str(L=8, s='1u+ 2d+'): 3,
-    })
+    m3 = MajoranaMonomial.from_str(L=8, s='0u+ 1u+')
+    m4 = MajoranaMonomial.from_str(L=8, s='0d+ 0d-')
+    m5 = MajoranaMonomial.from_str(L=8, s='1u+ 2d+')
+    op1 = MajoranaOperator({m3: 1, m4: 2})
+    op2 = MajoranaOperator({m5: 3})
 
     print(op1)
     print(op2)
