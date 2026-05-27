@@ -9,18 +9,21 @@
 * Build PSD blocks as vectorized sparse affine maps and affine constraints as a sparse matrix.
 
 ## Models
-* *Transverse-field Ising chain*
-  * lattice translation symmetry to generate momentum PSD blocks
-  * $\mathcal{K}$-symmetry (complex conjugation)
+Implemented:
+* *Transverse/Longitudinal-field Ising chain*
 * *$J_1$-$J_2$ Heisenberg chain*
-  * lattice translation symmetry to generate momentum PSD blocks
-  * lattice inversion
-  * $\mathcal{K}$-symmetry (complex conjugation)
-  * spin label permutation $S_3$
-  * $SO(3)$ spin rotation; $\pi$-rotation subgroup $C_2^3$ to further divide PSD blocks
 * *Hubbard chain*
-  * lattice translation symmetry to generate momentum PSD blocks
-  * $\mathcal{K}$-symmetry (complex conjugation)
+
+All three model compilers use:
+* lattice translation symmetry to generate momentum PSD blocks
+* lattice inversion
+* $\mathcal{K}$-symmetry (complex conjugation)
+
+Additional model-specific symmetries:
+* *$J_1$-$J_2$ Heisenberg chain*
+  * spin label permutation $S_3$
+  * $SO(3)$ spin rotation; $\pi$-rotation subgroup $C_2^3$ to further split PSD blocks
+* *Hubbard chain*
   * fermion parity
   * $U_\uparrow(1)\times U_\downarrow(1)$ charge symmetry; fixed filling number
 

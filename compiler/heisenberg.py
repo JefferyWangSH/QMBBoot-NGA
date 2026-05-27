@@ -89,10 +89,10 @@ class HeisenbergCompiler:
         return PauliString(L=self.L, mask=self.trans_canon(pstr))
 
     def _sym_canon(self, pstr: PauliString) -> int:
-        if not hasattr(self, '_sym_cache'):
-            self._sym_cache = {}
-        if pstr.mask in self._sym_cache:
-            return self._sym_cache[pstr.mask]
+        if not hasattr(self, '_sym_canon_cache'):
+            self._sym_canon_cache = {}
+        if pstr.mask in self._sym_canon_cache:
+            return self._sym_canon_cache[pstr.mask]
 
         orbit = []
         for base in (pstr, pstr.invert()):
@@ -103,7 +103,7 @@ class HeisenbergCompiler:
         # so taking trans_canon after each inversion/S3 image covers the full orbit.
         key = min(rep.trans_canon for rep in orbit)
         for rep in orbit:
-            self._sym_cache[rep.mask] = key
+            self._sym_canon_cache[rep.mask] = key
         return key
 
     @cache

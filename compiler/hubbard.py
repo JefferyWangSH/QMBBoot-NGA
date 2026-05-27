@@ -126,14 +126,24 @@ class HubbardCompiler:
         return MajoranaMonomial(self.L, self.trans_canon(monomial))
 
     @cache
-    def _sym_cache(self, mask: int) -> tuple[int, int] | None:
+    def _sym_canon_cache(self, mask: int) -> tuple[int, int] | None:
         monomial = MajoranaMonomial(self.L, mask)
         if monomial.period_sign == -1:
             return None
-        return monomial.trans_canon, monomial.trans_canon_sign
+
+        inv_monomial, inv_sign = monomial.invert()
+        cands = (
+            (monomial.trans_canon, monomial.trans_canon_sign),
+            (inv_monomial.trans_canon, inv_sign * inv_monomial.trans_canon_sign),
+        )
+        canon = min(key for key, _ in cands)
+        signs = {sign for key, sign in cands if key == canon}
+        if len(signs) > 1:
+            return None
+        return canon, signs.pop()
 
     def _sym_canon(self, monomial: MajoranaMonomial, sign: bool = False) -> int | tuple[int, int] | None:
-        canon = self._sym_cache(monomial.mask)
+        canon = self._sym_canon_cache(monomial.mask)
         if canon is None:
             return None
 
@@ -292,9 +302,12 @@ class HubbardCompiler:
                     seen_masks.add(mask)
 
                     cand = MajoranaMonomial(self.L, mask)
-                    key = self._sym_canon(cand)
-                    if key is None:
-                        continue
+                    # trans_canon is cheaper than _sym_canon
+                    # although it may produce redundant Ward identities
+                    key = self.trans_canon(cand)
+                    # key = self._sym_canon(cand)
+                    # if key is None:
+                    #     continue
                     if key in seen_keys:
                         continue
                     seen_keys.add(key)
@@ -366,9 +379,12 @@ class HubbardCompiler:
                 seen_masks.add(mask)
 
                 cand = MajoranaMonomial(self.L, mask)
-                key = self._sym_canon(cand)
-                if key is None:
-                    continue
+                # trans_canon is cheaper than _sym_canon
+                # although it may produce redundant Ward identities
+                key = self.trans_canon(cand)
+                # key = self._sym_canon(cand)
+                # if key is None:
+                #     continue
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)

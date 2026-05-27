@@ -123,11 +123,12 @@ class IsingCompiler:
         return PauliString(L=self.L, mask=self.trans_canon(pstr))
 
     @cache
-    def _sym_cache(self, mask: int) -> int:
-        return PauliString(self.L, mask).trans_canon
+    def _sym_canon_cache(self, mask: int) -> int:
+        pstr = PauliString(self.L, mask)
+        return min(pstr.trans_canon, pstr.invert().trans_canon)
 
     def _sym_canon(self, pstr: PauliString) -> int:
-        return self._sym_cache(pstr.mask)
+        return self._sym_canon_cache(pstr.mask)
 
     @cache
     def _sym_allowed_cache(self, mask: int) -> bool:
@@ -158,11 +159,12 @@ class IsingCompiler:
                 pstr1r = pstr1.translate(r)
                 for pstr2 in self.basis_reprs:
                     pstr, _ = pstr1r.dag().mul(pstr2)
-                    key = self._sym_canon(pstr)
 
-                    if self._sym_allowed(pstr) and key not in self.var_index:
-                        self.var_index[key] = len(self.vars)
-                        self.vars.append(self.trans_canon_rep(pstr))
+                    if self._sym_allowed(pstr):
+                        key = self._sym_canon(pstr)
+                        if key not in self.var_index:
+                            self.var_index[key] = len(self.vars)
+                            self.vars.append(PauliString(L=self.L, mask=key))
 
     @staticmethod
     def nonzero_fourier(pstr: PauliString, n: int) -> bool:
@@ -315,7 +317,9 @@ class IsingCompiler:
                     seen_masks.add(mask)
 
                     cand = PauliString(self.L, mask)
-                    key = self._sym_canon(cand)
+                    # trans_canon is cheaper than _sym_canon
+                    # although it may produce redundant Ward identities
+                    key = self.trans_canon(cand)
                     if key in seen_keys:
                         continue
                     seen_keys.add(key)
@@ -343,10 +347,10 @@ class IsingCompiler:
     def _compile_expr(self, op: PauliOperator) -> LinearExpr | None:
         expr = {}
         for pstr, coeff in op.terms.items():
+            if not self._sym_allowed(pstr):
+                continue
             key = self._sym_canon(pstr)
             if key not in self.var_index:
-                if not self._sym_allowed(pstr):
-                    continue
                 return None
             idx = self.var_index[key]
             expr[idx] = expr.get(idx, 0) + coeff
