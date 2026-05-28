@@ -204,8 +204,22 @@ class MajoranaMonomial:
         '''
         return 1 if self.dag_phase() == 1 else 1j
 
-    def fermion_parity(self):
-        return 1 - 2 * (self.degree() % 2)
+    def fermion_parity(self, spin=False):
+        if not spin:
+            return self.degree() % 2
+
+        up_count = 0
+        dn_count = 0
+        support = self.mask
+        while support:
+            bit = support & -support
+            mode = bit.bit_length() - 1
+            if mode % 4 < 2:
+                up_count += 1
+            else:
+                dn_count += 1
+            support ^= bit
+        return up_count % 2, dn_count % 2
 
     def k_parity(self, hermitian=True):
         mask = sum(1 << mode for mode in range(1, 4*self.L, 2))
@@ -214,7 +228,7 @@ class MajoranaMonomial:
         # patch from hermitianization
         if hermitian and self.dag_phase() == -1:
             cnt += 1
-        return 1 - 2 * (cnt % 2)
+        return cnt % 2
 
     def __str__(self):
         if self.mask == 0:

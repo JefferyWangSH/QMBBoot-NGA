@@ -67,7 +67,7 @@ class HubbardCompiler:
     block_momenta: list[int]
 
     # SDP variables are real expectations of
-    # hermitianized Majorana monomials with even fermion parity and odd K parity
+    # hermitianized Majorana monomials with even fermion parity for each spin and even K parity
     var_cpx: bool = False
     var_index: dict[int, int]
     vars: list[MajoranaMonomial]
@@ -162,7 +162,7 @@ class HubbardCompiler:
 
     def _sym_allowed(self, monomial: MajoranaMonomial) -> bool:
         '''
-            SDP variables should have even fermion parity and even K parity.
+            SDP variables should have even fermion parity for each spin and even K parity.
         '''
         if not hasattr(self, '_sym_allowed_cache'):
             self._sym_allowed_cache = LRU(_CACHE_MAX_SIZE)
@@ -170,8 +170,8 @@ class HubbardCompiler:
             return self._sym_allowed_cache[monomial.mask]
 
         allowed = (
-            monomial.fermion_parity() == 1
-            and monomial.k_parity(hermitian=True) == 1
+            monomial.fermion_parity(spin=True) == (0, 0)
+            and monomial.k_parity(hermitian=True) == 0
         )
         self._sym_allowed_cache[monomial.mask] = allowed
         return allowed
@@ -223,7 +223,7 @@ class HubbardCompiler:
             for monomial in self.basis_reprs:
                 if not self.nonzero_fourier(monomial, n):
                     continue
-                parity = monomial.fermion_parity()
+                parity = monomial.fermion_parity(spin=True)
                 parity_reprs.setdefault(parity, []).append(monomial)
 
             for parity in sorted(parity_reprs):
@@ -295,7 +295,7 @@ class HubbardCompiler:
             add representable stationarity Ward identities <[H, O]> == 0
             within the current SDP variable set
 
-            candidate O must have odd K parity and even fermion parity.
+            candidate O must have odd K parity and even spin-resolved fermion parity.
         '''
         seen_masks = set()
         seen_keys = set()
@@ -368,7 +368,7 @@ class HubbardCompiler:
             add representable U(1) Ward identities <[N_s, O]> == 0
             within the current SDP variable set
 
-            candidate O must have odd K parity and even fermion parity.
+            candidate O must have odd K parity and even spin-resolved fermion parity.
         '''
         assert spin in ('u', 'd')
         spin_offset = 0 if spin == 'u' else 2

@@ -129,12 +129,12 @@ class PauliString:
         return PauliString(self.L, mask), _PAULI_PHASE[phase_power & 3]
 
     def parity(self):
-        # +1 for K even and -1 for K odd
+        # 0 for K even and 1 for K odd
         y_count = sum(
             1 for i in range(self.L)
             if ((self.mask >> (2*i)) & 3) == 3
         )
-        return 1 - 2 * int(y_count % 2)
+        return y_count % 2
 
     def sign_charge(self):
         '''

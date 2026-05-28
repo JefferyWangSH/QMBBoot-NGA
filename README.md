@@ -22,10 +22,10 @@ All three model compilers use:
 Additional model-specific symmetries:
 * *$J_1$-$J_2$ Heisenberg chain*
   * spin label permutation $S_3$
-  * spin rotation $SO(3)$; $\pi$-rotation subgroup $C_2^3$ to further split PSD blocks
+  * spin rotation $SO(3)$; $\pi$-rotation subgroup $D_2=C_2\times C_2$ to further split PSD blocks
 * *Hubbard chain*
   * charge symmetry $U_\uparrow(1)\times U_\downarrow(1)$; fixed filling number
-  * total fermion parity $P$ to further split PSD blocks; consider $P_\uparrow \times P_\downarrow$ as a natural next refinement
+  * fermion parity $P_\uparrow\times P_\downarrow$ to further split PSD blocks
 
 ## TODOs
 * Observables beyond ground-state energy.

@@ -143,7 +143,7 @@ class IsingCompiler:
         if pstr.mask in self._sym_allowed_cache:
             return self._sym_allowed_cache[pstr.mask]
 
-        allowed = PauliString(self.L, pstr.mask).parity() == 1
+        allowed = PauliString(self.L, pstr.mask).parity() == 0
         self._sym_allowed_cache[pstr.mask] = allowed
         return allowed
 
