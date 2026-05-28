@@ -219,11 +219,16 @@ class HubbardCompiler:
         self.block_reprs = []
         self.block_momenta = []
         for n in range(self.L//2 + 1):
-            self.block_reprs.append([
-                monomial for monomial in self.basis_reprs
-                if self.nonzero_fourier(monomial, n)
-            ])
-            self.block_momenta.append(n)
+            parity_reprs = {}
+            for monomial in self.basis_reprs:
+                if not self.nonzero_fourier(monomial, n):
+                    continue
+                parity = monomial.fermion_parity()
+                parity_reprs.setdefault(parity, []).append(monomial)
+
+            for parity in sorted(parity_reprs):
+                self.block_reprs.append(parity_reprs[parity])
+                self.block_momenta.append(n)
 
     def _build_psd(self):
         '''

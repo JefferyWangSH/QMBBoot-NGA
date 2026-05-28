@@ -17,15 +17,15 @@ Implemented:
 All three model compilers use:
 * lattice translation symmetry to generate momentum PSD blocks
 * lattice inversion
-* $\mathcal{K}$-symmetry (complex conjugation)
+* complex conjugation $\mathcal{K}$-symmetry
 
 Additional model-specific symmetries:
 * *$J_1$-$J_2$ Heisenberg chain*
   * spin label permutation $S_3$
-  * $SO(3)$ spin rotation; $\pi$-rotation subgroup $C_2^3$ to further split PSD blocks
+  * spin rotation $SO(3)$; $\pi$-rotation subgroup $C_2^3$ to further split PSD blocks
 * *Hubbard chain*
-  * fermion parity
-  * $U_\uparrow(1)\times U_\downarrow(1)$ charge symmetry; fixed filling number
+  * charge symmetry $U_\uparrow(1)\times U_\downarrow(1)$; fixed filling number
+  * total fermion parity $P$ to further split PSD blocks; consider $P_\uparrow \times P_\downarrow$ as a natural next refinement
 
 ## TODOs
 * Observables beyond ground-state energy.
