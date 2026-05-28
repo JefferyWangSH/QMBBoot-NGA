@@ -1,14 +1,16 @@
 from dataclasses import dataclass
-from functools import cache
+from lru import LRU
 import numpy as np
 import scipy as sp
 
 from operators.pauli import PauliString, PauliOperator, _PAULI_PHASE, _PAULI_MUL_PHASE_POWER
 from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
 
+_CACHE_MAX_SIZE = 10_000_000
+
 
 '''
-    length-L transverse Ising chain (PBC)
+    length-L transverse/longitudinal-field Ising chain (PBC)
 '''
 
 @dataclass(slots=True)
@@ -112,30 +114,38 @@ class IsingCompiler:
             for site, _ in h_sites:
                 self._hamil_terms_at_site[site].append((h_sites, h_mask, h_coeff))
 
-    @cache
-    def _trans_cache(self, mask: int) -> int:
-        return PauliString(self.L, mask).trans_canon
-
     def trans_canon(self, pstr: PauliString) -> int:
-        return self._trans_cache(pstr.mask)
+        if not hasattr(self, '_trans_canon_cache'):
+            self._trans_canon_cache = LRU(_CACHE_MAX_SIZE)
+        if pstr.mask in self._trans_canon_cache:
+            return self._trans_canon_cache[pstr.mask]
+
+        key = PauliString(self.L, pstr.mask).trans_canon
+        self._trans_canon_cache[pstr.mask] = key
+        return key
 
     def trans_canon_rep(self, pstr: PauliString) -> PauliString:
         return PauliString(L=self.L, mask=self.trans_canon(pstr))
 
-    @cache
-    def _sym_canon_cache(self, mask: int) -> int:
-        pstr = PauliString(self.L, mask)
-        return min(pstr.trans_canon, pstr.invert().trans_canon)
-
     def _sym_canon(self, pstr: PauliString) -> int:
-        return self._sym_canon_cache(pstr.mask)
+        if not hasattr(self, '_sym_canon_cache'):
+            self._sym_canon_cache = LRU(_CACHE_MAX_SIZE)
+        if pstr.mask in self._sym_canon_cache:
+            return self._sym_canon_cache[pstr.mask]
 
-    @cache
-    def _sym_allowed_cache(self, mask: int) -> bool:
-        return PauliString(self.L, mask).parity() == 1
+        key = min(pstr.trans_canon, pstr.invert().trans_canon)
+        self._sym_canon_cache[pstr.mask] = key
+        return key
 
     def _sym_allowed(self, pstr: PauliString) -> bool:
-        return self._sym_allowed_cache(pstr.mask)
+        if not hasattr(self, '_sym_allowed_cache'):
+            self._sym_allowed_cache = LRU(_CACHE_MAX_SIZE)
+        if pstr.mask in self._sym_allowed_cache:
+            return self._sym_allowed_cache[pstr.mask]
+
+        allowed = PauliString(self.L, pstr.mask).parity() == 1
+        self._sym_allowed_cache[pstr.mask] = allowed
+        return allowed
 
     def _build_vars(self):
         '''
@@ -376,10 +386,6 @@ class IsingCompiler:
         self._build_affines()
 
     def descendants(self, pstr: PauliString):
-        return self._descendants(pstr.mask)
-
-    @cache
-    def _descendants(self, mask: int):
         r'''
             calculate
 
@@ -387,7 +393,11 @@ class IsingCompiler:
 
             as entry list [(O'(0)_b, s, C_{ab}(s)), ...]
         '''
-        pstr = PauliString(self.L, mask)
+        if not hasattr(self, '_descendants_cache'):
+            self._descendants_cache = LRU(_CACHE_MAX_SIZE)
+        if pstr.mask in self._descendants_cache:
+            return self._descendants_cache[pstr.mask]
+
         entries = {}
         comm_op = self._hamil_comm(pstr)
 
@@ -404,10 +414,12 @@ class IsingCompiler:
             if entries[key] == 0:
                 del entries[key]
 
-        return [
+        descs = [
             (PauliString(self.L, desc_mask), s, coeff)
             for (desc_mask, s), coeff in entries.items()
         ]
+        self._descendants_cache[pstr.mask] = descs
+        return descs
 
     def _get_expr_str(self, expr: LinearExpr) -> str:
         parts = [

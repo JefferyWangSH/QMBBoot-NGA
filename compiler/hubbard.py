@@ -1,11 +1,13 @@
 from dataclasses import dataclass
-from functools import cache
+from lru import LRU
 import itertools
 import numpy as np
 import scipy as sp
 
 from operators.majorana import MajoranaMonomial, MajoranaOperator
 from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
+
+_CACHE_MAX_SIZE = 10_000_000
 
 
 @dataclass(slots=True)
@@ -113,22 +115,32 @@ class HubbardCompiler:
         self.number_dn_op = build_number(params, spin='d')
         self.number_op = self.number_up_op + self.number_dn_op
 
-    @cache
-    def _trans_cache(self, mask: int) -> tuple[int, int]:
-        monomial = MajoranaMonomial(self.L, mask)
-        return monomial.trans_canon, monomial.trans_canon_sign
-
     def trans_canon(self, monomial: MajoranaMonomial) -> int:
-        canon, _ = self._trans_cache(monomial.mask)
-        return canon
+        if not hasattr(self, '_trans_canon_cache'):
+            self._trans_canon_cache = LRU(_CACHE_MAX_SIZE)
+        if monomial.mask in self._trans_canon_cache:
+            return self._trans_canon_cache[monomial.mask]
+
+        key = MajoranaMonomial(self.L, monomial.mask).trans_canon
+        self._trans_canon_cache[monomial.mask] = key
+        return key
 
     def trans_canon_rep(self, monomial: MajoranaMonomial) -> MajoranaMonomial:
         return MajoranaMonomial(self.L, self.trans_canon(monomial))
 
-    @cache
-    def _sym_canon_cache(self, mask: int) -> tuple[int, int] | None:
-        monomial = MajoranaMonomial(self.L, mask)
+    def _sym_canon(self, monomial: MajoranaMonomial, sign: bool = False) -> int | tuple[int, int] | None:
+        if not hasattr(self, '_sym_canon_cache'):
+            self._sym_canon_cache = LRU(_CACHE_MAX_SIZE)
+        if monomial.mask in self._sym_canon_cache:
+            canon = self._sym_canon_cache[monomial.mask]
+            if canon is None:
+                return None
+            if sign:
+                return canon
+            return canon[0]
+
         if monomial.period_sign == -1:
+            self._sym_canon_cache[monomial.mask] = None
             return None
 
         inv_monomial, inv_sign = monomial.invert()
@@ -139,31 +151,30 @@ class HubbardCompiler:
         canon = min(key for key, _ in cands)
         signs = {sign for key, sign in cands if key == canon}
         if len(signs) > 1:
-            return None
-        return canon, signs.pop()
-
-    def _sym_canon(self, monomial: MajoranaMonomial, sign: bool = False) -> int | tuple[int, int] | None:
-        canon = self._sym_canon_cache(monomial.mask)
-        if canon is None:
+            self._sym_canon_cache[monomial.mask] = None
             return None
 
+        canon_sign = signs.pop()
+        self._sym_canon_cache[monomial.mask] = (canon, canon_sign)
         if sign:
-            return canon
-        return canon[0]
+            return canon, canon_sign
+        return canon
 
-    @cache
-    def _sym_allowed_cache(self, mask: int) -> bool:
+    def _sym_allowed(self, monomial: MajoranaMonomial) -> bool:
         '''
             SDP variables should have even fermion parity and even K parity.
         '''
-        monomial = MajoranaMonomial(self.L, mask)
-        return (
+        if not hasattr(self, '_sym_allowed_cache'):
+            self._sym_allowed_cache = LRU(_CACHE_MAX_SIZE)
+        if monomial.mask in self._sym_allowed_cache:
+            return self._sym_allowed_cache[monomial.mask]
+
+        allowed = (
             monomial.fermion_parity() == 1
             and monomial.k_parity(hermitian=True) == 1
         )
-
-    def _sym_allowed(self, monomial: MajoranaMonomial) -> bool:
-        return self._sym_allowed_cache(monomial.mask)
+        self._sym_allowed_cache[monomial.mask] = allowed
+        return allowed
 
     @staticmethod
     def _moment(monomial1: MajoranaMonomial, monomial2: MajoranaMonomial) -> tuple[MajoranaMonomial, complex]:
@@ -460,10 +471,6 @@ class HubbardCompiler:
         self._build_affines()
 
     def descendants(self, monomial: MajoranaMonomial):
-        return self._descendants(monomial.mask)
-
-    @cache
-    def _descendants(self, mask: int):
         r'''
             calculate
 
@@ -471,7 +478,11 @@ class HubbardCompiler:
 
             as entry list [(O'(0)_b, s, C_{ab}(s)), ...]
         '''
-        monomial = MajoranaMonomial(L=self.L, mask=mask)
+        if not hasattr(self, '_descendants_cache'):
+            self._descendants_cache = LRU(_CACHE_MAX_SIZE)
+        if monomial.mask in self._descendants_cache:
+            return self._descendants_cache[monomial.mask]
+
         entries = {}
         comm_op = self._hamil_comm(monomial)
 
@@ -489,10 +500,12 @@ class HubbardCompiler:
             if entries[key] == 0:
                 del entries[key]
 
-        return [
+        descs = [
             (MajoranaMonomial(L=self.L, mask=desc_mask), s, coeff)
             for (desc_mask, s), coeff in entries.items()
         ]
+        self._descendants_cache[monomial.mask] = descs
+        return descs
 
     def _get_expr_str(self, expr: LinearExpr) -> str:
         parts = [

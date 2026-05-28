@@ -1,11 +1,13 @@
 from dataclasses import dataclass
-from functools import cache
+from lru import LRU
 import itertools
 import numpy as np
 import scipy as sp
 
 from operators.pauli import PauliString, PauliOperator, _PAULI_CODE, _PAULI_PHASE, _PAULI_MUL_PHASE_POWER
 from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
+
+_CACHE_MAX_SIZE = 10_000_000
 
 
 @dataclass(slots=True)
@@ -78,19 +80,22 @@ class HeisenbergCompiler:
             self._hamil_terms_at_site[site1].append((site2, code1, h_mask, h_coeff))
             self._hamil_terms_at_site[site2].append((site1, code2, h_mask, h_coeff))
 
-    @cache
-    def _trans_cache(self, mask: int) -> int:
-        return PauliString(self.L, mask).trans_canon
-
     def trans_canon(self, pstr: PauliString) -> int:
-        return self._trans_cache(pstr.mask)
+        if not hasattr(self, '_trans_canon_cache'):
+            self._trans_canon_cache = LRU(_CACHE_MAX_SIZE)
+        if pstr.mask in self._trans_canon_cache:
+            return self._trans_canon_cache[pstr.mask]
+
+        key = PauliString(self.L, pstr.mask).trans_canon
+        self._trans_canon_cache[pstr.mask] = key
+        return key
 
     def trans_canon_rep(self, pstr: PauliString) -> PauliString:
         return PauliString(L=self.L, mask=self.trans_canon(pstr))
 
     def _sym_canon(self, pstr: PauliString) -> int:
         if not hasattr(self, '_sym_canon_cache'):
-            self._sym_canon_cache = {}
+            self._sym_canon_cache = LRU(_CACHE_MAX_SIZE)
         if pstr.mask in self._sym_canon_cache:
             return self._sym_canon_cache[pstr.mask]
 
@@ -106,12 +111,15 @@ class HeisenbergCompiler:
             self._sym_canon_cache[rep.mask] = key
         return key
 
-    @cache
-    def _sym_allowed_cache(self, mask: int) -> bool:
-        return PauliString(self.L, mask).sign_charge() == (0, 0, 0)
-
     def _sym_allowed(self, pstr: PauliString) -> bool:
-        return self._sym_allowed_cache(pstr.mask)
+        if not hasattr(self, '_sym_allowed_cache'):
+            self._sym_allowed_cache = LRU(_CACHE_MAX_SIZE)
+        if pstr.mask in self._sym_allowed_cache:
+            return self._sym_allowed_cache[pstr.mask]
+
+        allowed = PauliString(self.L, pstr.mask).sign_charge() == (0, 0, 0)
+        self._sym_allowed_cache[pstr.mask] = allowed
+        return allowed
 
     def _build_vars(self):
         self.vars = []
@@ -436,11 +444,11 @@ class HeisenbergCompiler:
         self._build_affines()
 
     def descendants(self, pstr: PauliString):
-        return self._descendants(pstr.mask)
+        if not hasattr(self, '_descendants_cache'):
+            self._descendants_cache = LRU(_CACHE_MAX_SIZE)
+        if pstr.mask in self._descendants_cache:
+            return self._descendants_cache[pstr.mask]
 
-    @cache
-    def _descendants(self, mask: int):
-        pstr = PauliString(self.L, mask)
         entries = {}
         comm_op = self._hamil_comm(pstr)
 
@@ -457,10 +465,12 @@ class HeisenbergCompiler:
             if entries[key] == 0:
                 del entries[key]
 
-        return [
+        descs = [
             (PauliString(self.L, desc_mask), s, coeff)
             for (desc_mask, s), coeff in entries.items()
         ]
+        self._descendants_cache[pstr.mask] = descs
+        return descs
 
     def _get_expr_str(self, expr: LinearExpr) -> str:
         parts = [
