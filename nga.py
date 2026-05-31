@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field, fields
-import math
 import time
 
 import numpy as np
@@ -14,16 +13,6 @@ class NGAParams:
     drop_null_tol: float = 1e-9
     grow_null_tol: float = 1e-9
     max_drop_leverage: float = 1e-2
-    min_net_growth_per_step: int = 1
-    # max net basis growth per step given by
-    # max(net_growth_cap_base_per_step, net_growth_cap_rate * len(basis_reprs))
-    net_growth_cap_base_per_step: int = 4
-    net_growth_cap_rate: float = 0.1
-    # max number of basis drop per step given by
-    # max(drop_cap_base_per_step, drop_cap_rate * len(basis_reprs))
-    drop_cap_base_per_step: int = 1
-    drop_cap_rate: float = 0.1
-    reentry_penalty: float = 0.5
 
     def to_dict(self):
         return {
@@ -32,12 +21,6 @@ class NGAParams:
             'drop_null_tol': self.drop_null_tol,
             'grow_null_tol': self.grow_null_tol,
             'max_drop_leverage': self.max_drop_leverage,
-            'min_net_growth_per_step': self.min_net_growth_per_step,
-            'net_growth_cap_base_per_step': self.net_growth_cap_base_per_step,
-            'net_growth_cap_rate': self.net_growth_cap_rate,
-            'drop_cap_base_per_step': self.drop_cap_base_per_step,
-            'drop_cap_rate': self.drop_cap_rate,
-            'reentry_penalty': self.reentry_penalty,
         }
 
 @dataclass(slots=True)
@@ -61,6 +44,7 @@ class NGARecord:
         'solve_time': None,
     })
     nga_params: dict | None = None
+    scheduler: dict | None = None
 
     def to_dict(self):
         data = {}
@@ -94,6 +78,7 @@ class NGARunner:
         compiler,
         basis_reprs,
         required_basis_reprs,
+        scheduler,
         nga_params: NGAParams,
     ):
         self.compiler = compiler
@@ -115,6 +100,7 @@ class NGARunner:
         if self.required_keys - set(self.basis_indices):
             raise ValueError('required basis representatives must be included in basis_reprs')
 
+        self.scheduler = scheduler
         self.nga_params = nga_params
 
         self.solver = SDPSolver()
@@ -138,6 +124,10 @@ class NGARunner:
             basis_reps = len(self.basis_reprs),
             nga_params = nga_params_record,
         )
+
+    def _update_scheduler(self):
+        self.scheduler.update(self)
+        self.record.scheduler = self.scheduler.to_dict()
 
     def _canon(self, basis_rep):
         return self.compiler.trans_canon(basis_rep)
@@ -181,6 +171,7 @@ class NGARunner:
     def proposed_prune(self):
         if not self.psd_eigvals or not self.psd_eigvecs:
             raise ValueError('diagonalize psd blocks first')
+        self._update_scheduler()
 
         leverage = np.zeros(len(self.basis_reprs))
         null_eigvals = []
@@ -226,11 +217,7 @@ class NGARunner:
         ]
         # sorted by leverages in nullspace (ascending)
         cands.sort()
-        drop_cap = max(
-            self.nga_params.drop_cap_base_per_step,
-            math.ceil(self.nga_params.drop_cap_rate * len(self.basis_reprs)),
-        )
-        self.to_drop = [key for _, key in cands[:drop_cap]]
+        self.to_drop = [key for _, key in cands[:self.scheduler.drop_cap]]
 
         self.record.drop_null_count = null_count
         self.record.max_drop_null_eigval = max_null_eigval
@@ -241,11 +228,7 @@ class NGARunner:
             raise ValueError('diagonalize psd blocks first')
 
         basis_keys = set(self.basis_indices)
-        net_growth_cap = max(
-            self.nga_params.net_growth_cap_base_per_step,
-            math.ceil(self.nga_params.net_growth_cap_rate * len(self.basis_reprs)),
-        )
-        target_growth = len(self.to_drop) + net_growth_cap
+        target_growth = len(self.to_drop) + self.scheduler.net_growth_cap
         self.to_grow = []
 
         cand_scores = {}
@@ -324,10 +307,10 @@ class NGARunner:
         self.record.grow_null_count = len(null_eigvals)
         self.record.max_grow_null_eigval = float(np.max(null_eigvals)) if null_eigvals else None
 
-        if self.nga_params.reentry_penalty > 0:
+        if self.scheduler.reentry_penalty > 0:
             for key, count in self.drop_counts.items():
                 if key in cand_scores:
-                    cand_scores[key] *= (1 - self.nga_params.reentry_penalty) ** count
+                    cand_scores[key] *= (1 - self.scheduler.reentry_penalty) ** count
 
         cands = sorted(cand_scores, key=lambda key: (-cand_scores[key], key))
         self.to_grow = [cand_reps[key] for key in cands[:target_growth]]
@@ -335,7 +318,7 @@ class NGARunner:
 
     def update(self):
         while (
-            len(self.to_grow)-len(self.to_drop) < self.nga_params.min_net_growth_per_step
+            len(self.to_grow)-len(self.to_drop) < self.scheduler.net_growth_min
             and self.to_drop
         ):
             # pop from the right (lowest priority)
@@ -368,6 +351,7 @@ class NGARunner:
 if __name__ == '__main__':
 
     from compiler.ising import IsingCompiler, IsingParams, build_basis_reprs
+    from nga_scheduler import BaseScheduler
 
     params = IsingParams(L=16, J=1., h=1.)
     basis_reprs = build_basis_reprs(params.L, ['I', 'X', 'ZZ'])
@@ -382,11 +366,12 @@ if __name__ == '__main__':
             drop_null_tol=1e-8,
             grow_null_tol=1e-8,
             max_drop_leverage=5e-2,
-            min_net_growth_per_step=1,
-            net_growth_cap_base_per_step=8,
-            net_growth_cap_rate=0.0,
-            drop_cap_base_per_step=8,
-            drop_cap_rate=0.1,
+        ),
+        scheduler=BaseScheduler(
+            net_growth_min=1,
+            net_growth_cap=4,
+            drop_cap=4,
+            reentry_penalty=0.5,
         ),
     )
 

@@ -24,11 +24,15 @@
     "solver_kwargs": {},
     "drop_null_tol": 1e-7,
     "grow_null_tol": 1e-7,
-    "max_drop_leverage": 5e-2,
-    "min_net_growth_per_step": 1,
-    "net_growth_cap_base_per_step": 4,
+    "max_drop_leverage": 5e-2
+  },
+  "scheduler_type": "rate",
+  "scheduler": {
+    "net_growth_min": 1,
+    "net_growth_cap_base": 4,
     "net_growth_cap_rate": 0.0,
-    "drop_cap_base_per_step": 0,
-    "drop_cap_rate": 0.05
+    "drop_cap_base": 0,
+    "drop_cap_rate": 0.05,
+    "reentry_penalty": 0.5
   }
 }

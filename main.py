@@ -12,6 +12,7 @@ class ModelAdapter:
     model_params: object
     compiler: object
     nga_params: object
+    scheduler: object
     basis: list
     required_basis: list
     start_step: int
@@ -22,10 +23,11 @@ class ModelAdapter:
     @classmethod
     def load(cls, config: Path, resume: Path | None = None):
         data = json.loads(Path(config).read_text())
+
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ model
         model_type = data['model_type']
         model_config = data['model']
         basis_config = data['basis']
-        nga_params = NGAParams(**data['nga'])
 
         if model_type == 'hubbard':
             from compiler.hubbard import HubbardCompiler, HubbardParams, build_basis_reprs
@@ -55,6 +57,29 @@ class ModelAdapter:
         else:
             raise ValueError(f'unknown model type: {model_type}')
 
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ NGA params
+        nga_params = NGAParams(**data['nga'])
+
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ NGA scheduler
+        scheduler_type = data['scheduler_type']
+        scheduler_config = data['scheduler']
+
+        if scheduler_type == 'base':
+            from nga_scheduler import BaseScheduler
+            scheduler = BaseScheduler(**scheduler_config)
+
+        elif scheduler_type == 'rate':
+            from nga_scheduler import RateScheduler
+            scheduler = RateScheduler(**scheduler_config)
+
+        elif scheduler_type == 'decay':
+            from nga_scheduler import DecayScheduler
+            scheduler = DecayScheduler(**scheduler_config)
+
+        else:
+            raise ValueError(f'unknown scheduler type: {scheduler_type}')
+
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ resume
         if resume:
             resume_state = Path(resume) / 'state.json'
             resume_basis = Path(resume) / 'basis.json'
@@ -80,7 +105,7 @@ class ModelAdapter:
             }
             drop_counts = {}
 
-        return cls(model_type, model_params, compiler, nga_params, basis, required_basis, start_step, records, events, drop_counts)
+        return cls(model_type, model_params, compiler, nga_params, scheduler, basis, required_basis, start_step, records, events, drop_counts)
 
     def get_basis_rep(self, key):
         return type(self.basis[0])(self.model_params.L, key).trans_canon_rep
@@ -105,6 +130,7 @@ if __name__ == '__main__':
         basis_reprs=adapter.basis,
         required_basis_reprs=adapter.required_basis,
         nga_params=adapter.nga_params,
+        scheduler=adapter.scheduler,
     )
     runner.drop_counts = adapter.drop_counts
 
@@ -130,6 +156,7 @@ if __name__ == '__main__':
             'model_type': adapter.model_type,
             'model': asdict(adapter.model_params),
             'nga': asdict(adapter.nga_params),
+            'scheduler': runner.scheduler.to_dict(),
             'records': records,
         }
         output_state.write_text(json.dumps(state, indent=2))
