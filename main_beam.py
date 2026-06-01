@@ -4,10 +4,11 @@ import json
 from pathlib import Path
 import time
 
-from nga import NGAParams, NGARunner
+from nga import NGAParams
+from nga_beam import NGABeamRunner
 
 @dataclass
-class ModelAdapter:
+class BeamModelAdapter:
     model_type: str
     model_params: object
     compiler: object
@@ -64,18 +65,9 @@ class ModelAdapter:
         scheduler_type = data['scheduler_type']
         scheduler_config = data['scheduler']
 
-        if scheduler_type == 'base':
-            from nga_scheduler import BaseScheduler
-            scheduler = BaseScheduler(**scheduler_config)
-
-        elif scheduler_type == 'rate':
-            from nga_scheduler import RateScheduler
-            scheduler = RateScheduler(**scheduler_config)
-
-        elif scheduler_type == 'decay':
-            from nga_scheduler import DecayScheduler
-            scheduler = DecayScheduler(**scheduler_config)
-
+        if scheduler_type == 'beam_base':
+            from nga_scheduler import BaseBeamScheduler
+            scheduler = BaseBeamScheduler(**scheduler_config)
         else:
             raise ValueError(f'unknown scheduler type: {scheduler_type}')
 
@@ -107,25 +99,22 @@ class ModelAdapter:
 
         return cls(model_type, model_params, compiler, nga_params, scheduler, basis, required_basis, start_step, records, events, drop_counts)
 
-    def get_basis_rep(self, key):
-        return type(self.basis[0])(self.model_params.L, key).trans_canon_rep
-
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=Path, default=Path('config/hubbard.json'))
+    parser.add_argument('--config', type=Path, default=Path('config/hubbard_beam.json'))
     parser.add_argument('--output-dir', type=Path, default=Path('.'))
     parser.add_argument('--resume', type=Path, default=None)
     parser.add_argument('--steps', type=int, default=10)
     args = parser.parse_args()
 
-    adapter = ModelAdapter.load(args.config, args.resume)
+    adapter = BeamModelAdapter.load(args.config, args.resume)
     output_basis = args.output_dir / 'basis.json'
     output_state = args.output_dir / 'state.json'
     output_events = args.output_dir / 'events.json'
 
-    runner = NGARunner(
+    runner = NGABeamRunner(
         compiler=adapter.compiler,
         basis_reprs=adapter.basis,
         required_basis_reprs=adapter.required_basis,
@@ -140,12 +129,20 @@ if __name__ == '__main__':
 
     t0 = time.perf_counter()
     for step in range(start_step, start_step + args.steps):
-        _, record = runner.step()
+        record = runner.step()
 
         events['steps'].append({
             'step': step,
-            'drop': [str(adapter.get_basis_rep(key)) for key in runner.to_drop],
+            'selected': record.selected,
+            'drop': [str(rep.trans_canon_rep) for rep in runner.to_drop],
             'grow': [str(rep.trans_canon_rep) for rep in runner.to_grow],
+            'candidates': [
+                {
+                    key: [str(rep.trans_canon_rep) for rep in basis]
+                    for key, basis in cand.move.items()
+                }
+                for cand in runner.cands
+            ],
         })
         record = record.to_dict()
         records.append(record)
@@ -171,20 +168,19 @@ if __name__ == '__main__':
 
         print(
             f'[{step:03d}] '
-            f'{record["status"]} '
+            f'{record["status"]} | '
+            f'selected={record["selected"]} | '
             f'value={record["value"]:.12f} | '
             f'basis={record["basis_reps"]} '
             f'vars={record["n_vars"]} '
             f'aff_rank={record["affine_rank"]} '
             f'psd_dims={sum(record["psd_dims"])} | '
-            f'drop_null={record["drop_null_count"]} '
-            f'grow_null={record["grow_null_count"]} | '
             f'to_drop={record["to_drop"]} '
             f'to_grow={record["to_grow"]} '
             f'net={record["net_growth"]} | '
-            f'compile_s={record["time"]["compile_time"]:.1f} '
-            f'build_s={record["time"]["build_time"]:.1f} '
-            f'solve_s={record["time"]["solve_time"]:.1f} | '
+            f'max_compile_s={max(cand["record"]["time"]["compile_time"] for cand in record["candidates"]):.1f} '
+            f'max_build_s={max(cand["record"]["time"]["build_time"] for cand in record["candidates"]):.1f} '
+            f'max_solve_s={max(cand["record"]["time"]["solve_time"] for cand in record["candidates"]):.1f} | '
             f'elapsed_s={time.perf_counter()-t0:.1f}',
             flush=True,
         )

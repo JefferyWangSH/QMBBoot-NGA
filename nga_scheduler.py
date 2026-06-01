@@ -1,3 +1,4 @@
+from dataclasses import dataclass, fields
 import math
 
 class BaseScheduler:
@@ -106,3 +107,30 @@ class DecayScheduler(BaseScheduler):
             )
 
         self._check_validness()
+
+
+@dataclass(slots=True)
+class BaseBeamScheduler:
+    growth_cap: int
+    replace_num: int
+    replace_cap: int
+    grow_temperature: float
+    drop_temperature: float
+    reentry_penalty: float
+
+    def __post_init__(self):
+        assert self.growth_cap >= 1
+        assert self.replace_num >= 0
+        assert self.replace_cap >= 0
+        assert self.grow_temperature >= 0
+        assert self.drop_temperature >= 0
+        assert 0 <= self.reentry_penalty <= 1
+
+    def to_dict(self):
+        data = {'type': type(self).__name__}
+        for field in fields(self):
+            data[field.name] = getattr(self, field.name)
+        return data
+
+    def update(self, runner):
+        return

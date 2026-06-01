@@ -38,6 +38,7 @@ class NGARecord:
     to_drop: int | None = None
     to_grow: int | None = None
     net_growth: int | None = None
+    required_basis: list[str] | None = None
     time: dict = field(default_factory=lambda: {
         'compile_time': None,
         'build_time': None,
@@ -116,13 +117,10 @@ class NGARunner:
         self.drop_counts = {}
 
     def _reset_record(self):
-        nga_params_record = self.nga_params.to_dict()
-        nga_params_record['required_basis_reprs'] = [
-            str(self._canon_rep(rep)) for rep in self.required_basis_reprs
-        ]
         self.record = NGARecord(
             basis_reps = len(self.basis_reprs),
-            nga_params = nga_params_record,
+            nga_params = self.nga_params.to_dict(),
+            required_basis = [str(rep) for rep in self.required_basis_reprs],
         )
 
     def _update_scheduler(self):

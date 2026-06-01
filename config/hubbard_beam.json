@@ -32,15 +32,13 @@
     "grow_null_tol": 1e-5,
     "max_drop_leverage": 5e-2
   },
-  "scheduler_type": "decay",
+  "scheduler_type": "beam_base",
   "scheduler": {
-    "net_growth_min": 1,
-    "net_growth_cap_base": 4,
-    "net_growth_cap_rate": 0.05,
-    "drop_cap_base": 0,
-    "drop_cap_rate": 0.05,
-    "drop_decay_start": 200,
-    "drop_decay_end": 300,
+    "growth_cap": 4,
+    "replace_num": 1,
+    "replace_cap": 4,
+    "grow_temperature": 0.1,
+    "drop_temperature": 0.1,
     "reentry_penalty": 0.5
   }
 }
