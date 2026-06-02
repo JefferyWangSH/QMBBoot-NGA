@@ -131,8 +131,8 @@ if __name__ == '__main__':
         required_basis_reprs=adapter.required_basis,
         nga_params=adapter.nga_params,
         scheduler=adapter.scheduler,
+        drop_counts=adapter.drop_counts,
     )
-    runner.drop_counts = adapter.drop_counts
 
     start_step = adapter.start_step
     events = adapter.events

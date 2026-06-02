@@ -134,3 +134,42 @@ class BaseBeamScheduler:
 
     def update(self, runner):
         return
+
+class RateBeamScheduler:
+    def __init__(
+        self,
+        *,
+        growth_cap_base: int,
+        growth_cap_rate: float,
+        replace_num: int,
+        replace_cap_base: int,
+        replace_cap_rate: float,
+        grow_temperature: float,
+        drop_temperature: float,
+        reentry_penalty: float,
+    ):
+        self.growth_cap = None
+        self.replace_cap = None
+        self.replace_num = replace_num
+        self.grow_temperature = grow_temperature
+        self.drop_temperature = drop_temperature
+        self.reentry_penalty = reentry_penalty
+
+        self.growth_cap_base = growth_cap_base
+        self.growth_cap_rate = growth_cap_rate
+        self.replace_cap_base = replace_cap_base
+        self.replace_cap_rate = replace_cap_rate
+
+    def to_dict(self):
+        return {'type': type(self).__name__, **self.__dict__}
+
+    def update(self, runner):
+        basis_size = len(runner.basis_reprs)
+        self.growth_cap = max(
+            self.growth_cap_base,
+            math.ceil(self.growth_cap_rate * basis_size),
+        )
+        self.replace_cap = max(
+            self.replace_cap_base,
+            math.ceil(self.replace_cap_rate * basis_size),
+        )

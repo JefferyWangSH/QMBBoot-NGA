@@ -68,6 +68,11 @@ class BeamModelAdapter:
         if scheduler_type == 'beam_base':
             from nga_scheduler import BaseBeamScheduler
             scheduler = BaseBeamScheduler(**scheduler_config)
+
+        elif scheduler_type == 'beam_rate':
+            from nga_scheduler import RateBeamScheduler
+            scheduler = RateBeamScheduler(**scheduler_config)
+
         else:
             raise ValueError(f'unknown scheduler type: {scheduler_type}')
 
@@ -107,6 +112,7 @@ if __name__ == '__main__':
     parser.add_argument('--output-dir', type=Path, default=Path('.'))
     parser.add_argument('--resume', type=Path, default=None)
     parser.add_argument('--steps', type=int, default=10)
+    parser.add_argument('--max-workers', type=int, default=1)
     args = parser.parse_args()
 
     adapter = BeamModelAdapter.load(args.config, args.resume)
@@ -120,8 +126,9 @@ if __name__ == '__main__':
         required_basis_reprs=adapter.required_basis,
         nga_params=adapter.nga_params,
         scheduler=adapter.scheduler,
+        drop_counts=adapter.drop_counts,
+        max_workers=args.max_workers,
     )
-    runner.drop_counts = adapter.drop_counts
 
     start_step = adapter.start_step
     events = adapter.events

@@ -81,6 +81,7 @@ class NGARunner:
         required_basis_reprs,
         scheduler,
         nga_params: NGAParams,
+        drop_counts: dict | None = None,
     ):
         self.compiler = compiler
 
@@ -114,7 +115,7 @@ class NGARunner:
         # small indices have higher priority
         self.to_drop = []
         self.to_grow = []
-        self.drop_counts = {}
+        self.drop_counts = {} if drop_counts is None else drop_counts
 
     def _reset_record(self):
         self.record = NGARecord(

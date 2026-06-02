@@ -89,6 +89,8 @@ class NGABeamRunner:
         required_basis_reprs,
         scheduler,
         nga_params: NGAParams,
+        drop_counts: dict | None = None,
+        max_workers: int = 1,
     ):
         self.compiler = compiler
 
@@ -107,9 +109,10 @@ class NGABeamRunner:
         
         self.scheduler = scheduler
         self.nga_params = nga_params
+        self.max_workers = max_workers
         self.solver = SDPSolver()
 
-        self.drop_counts = {}
+        self.drop_counts = {} if drop_counts is None else drop_counts
         self.to_drop = []
         self.to_grow = []
         self.psd_eigvals = []
@@ -162,7 +165,7 @@ class NGABeamRunner:
             self.psd_eigvals.append(eigvals)
             self.psd_eigvecs.append(eigvecs)
         return eval_record
-    
+
     def _drop_scores(self, basis_cand, eval_record: NGAEvalRecord):
         leverage = np.zeros(len(basis_cand))
         null_eigvals = []
@@ -373,18 +376,39 @@ class NGABeamRunner:
         )
         self.cands = [root]
 
+        jobs = []
         for _ in range(self.scheduler.replace_num):
             move, probs = self._replace(root_drop_scores, root_grow_scores)
             basis_cand = self._apply_move(root_basis, move)
-            eval_record = self.evaluate(basis_cand)
-            grow_scores = self._grow_scores(basis_cand, eval_record)
-            self.cands.append(NGABeamCandidate(
+            jobs.append((basis_cand, move, probs))
+
+        def eval_job(job):
+            basis_cand, move, probs = job
+            runner = NGABeamRunner(
+                compiler=type(self.compiler)(self.compiler.params),
+                basis_reprs=basis_cand,
+                required_basis_reprs=self.required_basis_reprs,
+                scheduler=self.scheduler,
+                nga_params=self.nga_params,
+                drop_counts=dict(self.drop_counts),
+            )
+            eval_record = runner.evaluate(basis_cand)
+            grow_scores = runner._grow_scores(basis_cand, eval_record)
+            return NGABeamCandidate(
                 record=eval_record,
                 basis=basis_cand,
                 move=move,
                 probs=probs,
                 grow_scores=grow_scores,
-            ))
+            )
+
+        max_workers = min(len(jobs), self.max_workers)
+        if max_workers > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                self.cands.extend(executor.map(eval_job, jobs))
+        else:
+            self.cands.extend(eval_job(job) for job in jobs)
 
         selected = max(range(len(self.cands)), key=lambda i: self.cands[i].record.value)
         best = self.cands[selected]
@@ -458,10 +482,11 @@ if __name__ == '__main__':
             growth_cap=4,
             replace_num=2,
             replace_cap=4,
-            grow_temperature=0.5,
+            grow_temperature=0.1,
             drop_temperature=0.1,
             reentry_penalty=0.5,
         ),
+        max_workers=2,
     )
 
     n_steps = 10
