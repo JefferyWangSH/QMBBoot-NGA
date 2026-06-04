@@ -11,6 +11,8 @@ from sdp import SDPSolver
 class NGABeamRecord:
     selected: int | None = None
     value: float | None = None
+    objective_sense: str | None = None
+    observables: dict | None = None
     status: str | None = None
     basis_reps: int | None = None
     psd_dims: list[int] | None = None
@@ -23,18 +25,29 @@ class NGABeamRecord:
     nga_params: dict | None = None
     candidates: list[dict] = field(default_factory=list)
 
+    @classmethod
+    def _serialize(cls, value):
+        if isinstance(value, np.generic):
+            value = value.item()
+        if isinstance(value, complex):
+            return {'real': value.real, 'imag': value.imag}
+        if isinstance(value, list):
+            return [cls._serialize(item) for item in value]
+        if isinstance(value, dict):
+            return {key: cls._serialize(item) for key, item in value.items()}
+        return value
+
     def to_dict(self):
         data = {}
         for field in fields(self):
-            value = getattr(self, field.name)
-            if hasattr(value, 'item'):
-                value = value.item()
-            data[field.name] = value
+            data[field.name] = self._serialize(getattr(self, field.name))
         return data
 
 @dataclass(slots=True)
 class NGAEvalRecord:
     value: float | None = None
+    objective_sense: str | None = None
+    observables: dict | None = None
     status: str | None = None
     basis_reps: int | None = None
     psd_dims: list[int] | None = None
@@ -52,13 +65,22 @@ class NGAEvalRecord:
     max_drop_null_eigval: float | None = None
     max_grow_null_eigval: float | None = None
 
+    @classmethod
+    def _serialize(cls, value):
+        if isinstance(value, np.generic):
+            value = value.item()
+        if isinstance(value, complex):
+            return {'real': value.real, 'imag': value.imag}
+        if isinstance(value, list):
+            return [cls._serialize(item) for item in value]
+        if isinstance(value, dict):
+            return {key: cls._serialize(item) for key, item in value.items()}
+        return value
+
     def to_dict(self):
         data = {}
         for field in fields(self):
-            value = getattr(self, field.name)
-            if hasattr(value, 'item'):
-                value = value.item()
-            data[field.name] = value
+            data[field.name] = self._serialize(getattr(self, field.name))
         return data
 
 @dataclass(slots=True)
@@ -150,12 +172,17 @@ class NGABeamRunner:
         eval_record.affine_rank = summary['affines_rank']
 
         start = time.perf_counter()
-        eval_record.value = self.solver.solve(
+        self.solver.solve(
             backend=self.nga_params.solver_backend,
             **self.nga_params.solver_kwargs,
         )
-        eval_record.status = self.solver.status
         eval_record.time['solve_time'] = time.perf_counter() - start
+
+        summary = self.solver.summary()
+        eval_record.value = summary['value']
+        eval_record.objective_sense = summary['objective_sense']
+        eval_record.observables = summary['observables']
+        eval_record.status = summary['status']
 
         self.psd_eigvals = []
         self.psd_eigvecs = []
@@ -385,7 +412,7 @@ class NGABeamRunner:
         def eval_job(job):
             basis_cand, move, probs = job
             runner = NGABeamRunner(
-                compiler=type(self.compiler)(self.compiler.params),
+                compiler=self.compiler.clone(),
                 basis_reprs=basis_cand,
                 required_basis_reprs=self.required_basis_reprs,
                 scheduler=self.scheduler,
@@ -410,7 +437,10 @@ class NGABeamRunner:
         else:
             self.cands.extend(eval_job(job) for job in jobs)
 
-        selected = max(range(len(self.cands)), key=lambda i: self.cands[i].record.value)
+        if self.compiler.obj_sense == 'min':
+            selected = max(range(len(self.cands)), key=lambda i: self.cands[i].record.value)
+        else:
+            selected = min(range(len(self.cands)), key=lambda i: self.cands[i].record.value)
         best = self.cands[selected]
         grow_move = {'drop': [], 'grow': self._grow(best.grow_scores)}
 
@@ -432,6 +462,8 @@ class NGABeamRunner:
     
         self.beam_record.selected = selected
         self.beam_record.value = best.record.value
+        self.beam_record.objective_sense = best.record.objective_sense
+        self.beam_record.observables = best.record.observables
         self.beam_record.status = best.record.status
         self.beam_record.candidates = [cand.to_dict() for cand in self.cands]
         self.beam_record.to_drop = len(self.to_drop)

@@ -5,6 +5,15 @@
     "J1": 1.0,
     "J2": 1.0
   },
+  "objective": {
+    "obj": "hamil",
+    "obj_sense": "min",
+    "e_lb": null,
+    "e_ub": null
+  },
+  "observables": [
+    "hamil", "szz"
+  ],
   "basis": {
     "initial": [
       "I",

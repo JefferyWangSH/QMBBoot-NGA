@@ -136,8 +136,11 @@ class SDPData:
     var_cpx: bool
     n_vars: int
     objective: LinearExpr
+    objective_sense: str
     psd_blocks: list[PSDConstraints]
     affines_mat: sp.sparse.csr_matrix
+    observables: dict[str, LinearExpr | list[LinearExpr]]
+    energy_ineqs: list[LinearExpr]
 
 
 class SDPSolver:
@@ -147,7 +150,15 @@ class SDPSolver:
         self.constraints = None
         self.problem = None
         self.objective = None
+        self.objective_sense = None
+        self.observables = None
         self.status = None
+
+    def _to_cp_expr(self, expr: LinearExpr):
+        res = cp.Constant(expr.const)
+        for idx, coeff in expr.terms.items():
+            res += coeff * self.vars[idx]
+        return res
 
     def build(self, data: SDPData):
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ variables
@@ -167,12 +178,32 @@ class SDPSolver:
             self.constraints.append(data.affines_mat @ m_aug == 0)
 
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ objective
-        obj = cp.Constant(data.objective.const)
-        for idx, coeff in data.objective.terms.items():
-            obj += coeff * self.vars[idx]
+        obj = self._to_cp_expr(data.objective)
         if obj.is_complex():
             obj = cp.real(obj)
-        self.objective = cp.Minimize(obj)
+
+        self.objective_sense = data.objective_sense
+        if self.objective_sense == 'min':
+            self.objective = cp.Minimize(obj)
+        elif self.objective_sense == 'max':
+            self.objective = cp.Maximize(obj)
+        else:
+            raise ValueError(f'unknown objective sense: {self.objective_sense}')
+
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ energy window
+        for ineq in data.energy_ineqs:
+            expr = self._to_cp_expr(ineq)
+            if expr.is_complex():
+                expr = cp.real(expr)
+            self.constraints.append(expr >= 0)
+
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ uncertified observable estimates
+        self.observables = {}
+        for name, obs in data.observables.items():
+            if isinstance(obs, list):
+                self.observables[name] = [self._to_cp_expr(item) for item in obs]
+            else:
+                self.observables[name] = self._to_cp_expr(obs)
 
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ problem
         self.problem = cp.Problem(self.objective, self.constraints)
@@ -192,6 +223,11 @@ class SDPSolver:
             'n_constraints': len(self.constraints),
             'status': self.problem.status,
             'value': self.problem.value,
+            'objective_sense': self.objective_sense,
+            'observables': {
+                name: [item.value for item in obs] if isinstance(obs, list) else obs.value
+                for name, obs in self.observables.items()
+            },
             'solver_name': self.problem.solver_stats.solver_name,
             'solve_time': self.problem.solver_stats.solve_time,
             'num_iters': self.problem.solver_stats.num_iters,

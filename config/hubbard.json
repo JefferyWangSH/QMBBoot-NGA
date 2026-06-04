@@ -6,6 +6,15 @@
     "U": 4.0,
     "n_particles": 10
   },
+  "objective": {
+    "obj": "hamil",
+    "obj_sense": "min",
+    "e_lb": null,
+    "e_ub": null
+  },
+  "observables": [
+    "hamil", "szz"
+  ],
   "basis": {
     "initial": {
       "max_degree": 4,

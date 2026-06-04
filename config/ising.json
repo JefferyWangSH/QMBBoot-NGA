@@ -6,6 +6,15 @@
     "h": 1.0,
     "hz": 0
   },
+  "objective": {
+    "obj": "hamil",
+    "obj_sense": "min",
+    "e_lb": null,
+    "e_ub": null
+  },
+  "observables": [
+    "hamil", "zz"
+  ],
   "basis": {
     "initial": [
       "I",

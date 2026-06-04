@@ -1,4 +1,5 @@
 from nga import NGAParams, NGARunner
+from nga_scheduler import BaseScheduler
 from compiler.hubbard import HubbardCompiler, HubbardParams, build_basis_reprs
 from operators.majorana import MajoranaMonomial
 
@@ -27,17 +28,18 @@ if __name__ == '__main__':
                 'max_iters': 5000
             },
             drop_null_tol=1e-5,
-            grow_null_tol=1e-6,
+            grow_null_tol=1e-5,
             max_drop_leverage=5e-2,
-            min_net_growth_per_step=1,
-            net_growth_cap_base_per_step=8,
-            net_growth_cap_rate=0,
-            drop_cap_base_per_step=8,
-            drop_cap_rate=0.15,
+        ),
+        scheduler=BaseScheduler(
+            net_growth_min=1,
+            net_growth_cap=8,
+            drop_cap=8,
+            reentry_penalty=0.5,
         ),
     )
 
-    n_steps = 8
+    n_steps = 10
     for i in range(n_steps):
         summary, record = runner.step()
         print(i, summary)

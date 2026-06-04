@@ -264,6 +264,9 @@ class MajoranaOperator:
             parts.append(f'{coeff}*({monomial})')
         return ' + '.join(parts)
 
+    def __eq__(self, other):
+        return self.L == other.L and self.terms == other.terms
+
     def copy(self):
         op = MajoranaOperator()
         op.L = self.L

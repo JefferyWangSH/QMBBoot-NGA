@@ -26,6 +26,8 @@ class NGAParams:
 @dataclass(slots=True)
 class NGARecord:
     value: float | None = None
+    objective_sense: str | None = None
+    observables: dict | None = None
     status: str | None = None
     basis_reps: int | None = None
     psd_dims: list[int] | None = None
@@ -47,13 +49,22 @@ class NGARecord:
     nga_params: dict | None = None
     scheduler: dict | None = None
 
+    @classmethod
+    def _serialize(cls, value):
+        if isinstance(value, np.generic):
+            value = value.item()
+        if isinstance(value, complex):
+            return {'real': value.real, 'imag': value.imag}
+        if isinstance(value, list):
+            return [cls._serialize(item) for item in value]
+        if isinstance(value, dict):
+            return {key: cls._serialize(item) for key, item in value.items()}
+        return value
+
     def to_dict(self):
         data = {}
         for field in fields(self):
-            value = getattr(self, field.name)
-            if hasattr(value, 'item'):
-                value = value.item()
-            data[field.name] = value
+            data[field.name] = self._serialize(getattr(self, field.name))
         return data
 
 
@@ -150,13 +161,17 @@ class NGARunner:
 
     def solve(self):
         start = time.perf_counter()
-        value = self.solver.solve(
+        self.solver.solve(
             backend=self.nga_params.solver_backend,
             **self.nga_params.solver_kwargs,
         )
         self.record.time['solve_time'] = time.perf_counter() - start
-        self.record.value = value
-        self.record.status = self.solver.status
+
+        summary = self.solver.summary()
+        self.record.value = summary['value']
+        self.record.objective_sense = summary['objective_sense']
+        self.record.observables = summary['observables']
+        self.record.status = summary['status']
 
     def diagonalize(self):
         self.psd_eigvals = []

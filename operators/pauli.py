@@ -185,6 +185,9 @@ class PauliOperator:
             f'{coeff}*{str(pstr)}' for pstr, coeff in self.terms.items()
         ])
 
+    def __eq__(self, other):
+        return self.L == other.L and self.terms == other.terms
+
     def copy(self):
         op = PauliOperator()
         op.L = self.L

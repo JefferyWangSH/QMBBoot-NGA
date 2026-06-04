@@ -849,3 +849,64 @@ Refs:
     >     \sigma_i^a\sigma_{i+2}^b\sigma_{i+4}^c.
     > $$
     > This sparse basis is more targeted than a full degree-truncated Pauli basis.
+
+### *8. Certified observable bounds*
+The observable expectation value directly read from an energy bootstrap solution is generally not certified. Suppose the energy SDP is solved as
+$$
+\begin{aligned}
+    E_R = \min_\mathbf{x}\quad & \mathbf{h}^T\mathbf{x} \\
+    \text{subject to}\quad & M_\mathcal{S}(\mathbf{x})\succeq0,\\
+    & A\mathbf{x}=\mathbf{b},
+\end{aligned}
+$$
+where $\mathbf{x}$ is the moment vector, $\mathbf{h}^T\mathbf{x}=\langle H\rangle$, and $\mathcal{S}$ is the chosen bootstrap basis. If $\mathbf{x}_H^*$ is one optimal solution, then
+$$
+    \widehat{o}=\mathbf{o}^T\mathbf{x}_H^*
+$$
+can be used as an estimate of $\langle O\rangle$, but it is not automatically a lower or upper bound on the true ground-state value. The optimizer $\mathbf{x}_H^*$ may be non-unique and may also be a relaxed pseudo-moment assignment rather than an exact quantum state.
+
+To obtain certified bounds on an observable $O$, one should solve two separate SDPs with the observable as the objective. Let $E_A$ be a valid variational upper bound on the ground-state energy and $E_R$ a valid SDP lower bound. Write $\mathbf{o}^T\mathbf{x}=\langle O\rangle$. The lower observable bound is
+$$
+\begin{aligned}
+    o_{\mathrm{LB}} = \min_\mathbf{x}\quad & \mathbf{o}^T\mathbf{x} \\
+    \text{subject to}\quad & M_\mathcal{S}(\mathbf{x})\succeq0,\\
+    & A\mathbf{x}=\mathbf{b},\\
+    & E_R \le \mathbf{h}^T\mathbf{x} \le E_A.
+\end{aligned}
+$$
+Similarly, the upper observable bound is
+$$
+\begin{aligned}
+    o_{\mathrm{UB}} = \max_\mathbf{x}\quad & \mathbf{o}^T\mathbf{x} \\
+    \text{subject to}\quad & M_\mathcal{S}(\mathbf{x})\succeq0,\\
+    & A\mathbf{x}=\mathbf{b},\\
+    & E_R \le \mathbf{h}^T\mathbf{x} \le E_A.
+\end{aligned}
+$$
+Equivalently, the upper bound can be computed by minimizing $-\mathbf{o}^T\mathbf{x}$ with the same constraints. Since the true ground-state moment vector satisfies the bootstrap constraints and has energy $E_{\mathrm{GS}}\in[E_R,E_A]$, these optimizations certify
+$$
+    o_{\mathrm{LB}} \le \langle O\rangle_{\mathrm{GS}} \le o_{\mathrm{UB}}.
+$$
+The basis $\mathcal{S}$ used to tightly bound the energy is not necessarily optimal for bounding a chosen observable. NGA can therefore be reused for observable bounds in two ways. First, energy-oriented NGA improves $E_R$ and shrinks the energy window $[E_R,E_A]$, which often tightens all observable bounds. Second, one can run an observable-aware NGA loop: solve the lower and upper observable SDPs, extract the nullspaces of the corresponding optimal moment matrices, and grow the basis using descendants of these observable-extremal null directions.
+
+For example, consider spin correlations in Hubbard. Recall
+$$
+    n_{x,\sigma} = \frac{1}{2} \left(1 + i\gamma^1_{x,\sigma} \gamma^2_{x,\sigma}\right),
+$$
+and
+$$
+    S_z(x) = \frac{1}{2}\left(n_{x,\uparrow}-n_{x,\downarrow}\right) = \frac{i}{4}\left(\gamma^1_{x,\uparrow} \gamma^2_{x,\uparrow} - \gamma^1_{x,\downarrow} \gamma^2_{x,\downarrow}\right),
+$$
+we have
+$$
+    S_z(0) S_z(r) = -\frac{1}{16} \left[
+        \gamma^1_{0\uparrow} \gamma^2_{0\uparrow} \gamma^1_{r\uparrow} \gamma^2_{r\uparrow}
+      + \gamma^1_{0\downarrow} \gamma^2_{0\downarrow} \gamma^1_{r\downarrow} \gamma^2_{r\downarrow}
+      - \gamma^1_{0\uparrow} \gamma^2_{0\uparrow} \gamma^1_{r\downarrow} \gamma^2_{r\downarrow}
+      - \gamma^1_{0\downarrow} \gamma^2_{0\downarrow} \gamma^1_{r\uparrow} \gamma^2_{r\uparrow}
+    \right].
+$$
+Specially for $r=0$,
+$$
+    S_{zz}(0) = \frac{1}{8} \left(1 + \gamma^1_{0\uparrow} \gamma^2_{0\uparrow} \gamma^1_{0\downarrow} \gamma^2_{0\downarrow}\right).
+$$

@@ -1,6 +1,6 @@
 # QMBBoot-NGA
 * *Nullspace-guided adaptive algorithm of quantum many-body bootstrap (QMBBoot-NGA).*
-* Currently support computing ground-state energy lower bounds for finite lattice chains.
+* Support computing lower bounds of ground-state energy density and certified lower/upper bounds of observables for finite lattice chains.
 * Utilize symmetries to
   * expose block structure in PSD moment matrices,
   * prune SDP optimization variables,
@@ -28,8 +28,7 @@ Additional model-specific symmetries:
   * fermion parity $P_\uparrow\times P_\downarrow$ to further split PSD blocks
 
 ## TODOs
-* Observables beyond ground-state energy.
-* Bootstrap thermal states.
+- [ ] Bootstrap thermal states.
 
 ## Refs
 * https://arxiv.org/pdf/2410.00810

@@ -21,6 +21,34 @@ class BeamModelAdapter:
     events: dict
     drop_counts: dict
 
+    @staticmethod
+    def build_compiler_kwargs(config_data: dict, build_obj, build_obs):
+        obj_config = config_data.get('objective', {})
+        obj_name = obj_config.get('obj', 'hamil')
+        obj_op = None if obj_name == 'hamil' else build_obj(obj_name)
+
+        obj_sense = obj_config.get('obj_sense', 'min')
+        if obj_sense not in ('min', 'max'):
+            raise ValueError(f'unknown objective sense: {obj_sense}')
+        if obj_name == 'hamil' and obj_sense != 'min':
+            raise ValueError('Hamiltonian objective only supports min')
+
+        e_lb = obj_config.get('e_lb')
+        e_ub = obj_config.get('e_ub')
+        if obj_name == 'hamil' and (e_lb is not None or e_ub is not None):
+            raise ValueError('Hamiltonian objective does not use energy bounds e_lb or e_ub')
+        if obj_name != 'hamil' and (e_lb is None or e_ub is None):
+            raise ValueError('observable objective requires energy bounds e_lb and e_ub')
+
+        obs_ops = {name: build_obs(name) for name in config_data.get('observables', [])}
+        return {
+            'obj_op': obj_op,
+            'obj_sense': obj_sense,
+            'e_lb': e_lb,
+            'e_ub': e_ub,
+            'obs_ops': obs_ops,
+        }
+
     @classmethod
     def load(cls, config: Path, resume: Path | None = None):
         data = json.loads(Path(config).read_text())
@@ -31,26 +59,80 @@ class BeamModelAdapter:
         basis_config = data['basis']
 
         if model_type == 'hubbard':
-            from compiler.hubbard import HubbardCompiler, HubbardParams, build_basis_reprs
+            from compiler.hubbard import HubbardCompiler, HubbardParams, build_basis_reprs, build_hamil, build_szz
             from operators.majorana import MajoranaMonomial
             model_params = HubbardParams(**model_config)
-            compiler = HubbardCompiler(model_params)
+
+            def build_obj(name):
+                if name == 'hamil':
+                    return build_hamil(model_params)
+                if name == 'szz':
+                    return build_szz(model_params, 1)
+                raise ValueError(f'unknown Hubbard objective: {name}')
+
+            def build_obs(name):
+                if name == 'hamil':
+                    return build_hamil(model_params)
+                if name == 'szz':
+                    return [build_szz(model_params, r) for r in range(model_params.L//2 + 1)]
+                raise ValueError(f'unknown Hubbard observable: {name}')
+
+            compiler = HubbardCompiler(
+                model_params,
+                **cls.build_compiler_kwargs(data, build_obj, build_obs),
+            )
             parse_basis = lambda strings: [MajoranaMonomial.from_str(model_params.L, s).trans_canon_rep for s in strings]
             initial_basis = lambda initial: parse_basis(initial) if isinstance(initial, list) else build_basis_reprs(model_params.L, **initial)
             required_basis = parse_basis(basis_config['required'])
 
         elif model_type == 'ising':
-            from compiler.ising import IsingCompiler, IsingParams, build_basis_reprs
+            from compiler.ising import IsingCompiler, IsingParams, build_basis_reprs, build_hamil, build_zz
             model_params = IsingParams(**model_config)
-            compiler = IsingCompiler(model_params)
+
+            def build_obj(name):
+                if name == 'hamil':
+                    return build_hamil(model_params)
+                if name == 'zz':
+                    return build_zz(model_params, 1)
+                raise ValueError(f'unknown Ising objective: {name}')
+
+            def build_obs(name):
+                if name == 'hamil':
+                    return build_hamil(model_params)
+                if name == 'zz':
+                    return [build_zz(model_params, r) for r in range(model_params.L//2 + 1)]
+                raise ValueError(f'unknown Ising observable: {name}')
+
+            compiler = IsingCompiler(
+                model_params,
+                **cls.build_compiler_kwargs(data, build_obj, build_obs),
+            )
             parse_basis = lambda strings: build_basis_reprs(model_params.L, strings)
             initial_basis = lambda initial: build_basis_reprs(model_params.L, initial)
             required_basis = parse_basis(basis_config['required'])
 
         elif model_type == 'heisenberg':
-            from compiler.heisenberg import HeisenbergCompiler, HeisenbergParams, build_basis_reprs
+            from compiler.heisenberg import HeisenbergCompiler, HeisenbergParams, build_basis_reprs, build_hamil, build_szz
             model_params = HeisenbergParams(**model_config)
-            compiler = HeisenbergCompiler(model_params)
+
+            def build_obj(name):
+                if name == 'hamil':
+                    return build_hamil(model_params)
+                if name == 'szz':
+                    return build_szz(model_params, 1)
+                raise ValueError(f'unknown Heisenberg objective: {name}')
+
+            def build_obs(name):
+                if name == 'hamil':
+                    return build_hamil(model_params)
+                if name == 'szz':
+                    return [build_szz(model_params, r) for r in range(model_params.L//2 + 1)]
+                raise ValueError(f'unknown Heisenberg observable: {name}')
+
+            compiler = HeisenbergCompiler(
+                model_params,
+                **cls.build_compiler_kwargs(data, build_obj, build_obs),
+            )
             parse_basis = lambda strings: build_basis_reprs(model_params.L, strings)
             initial_basis = lambda initial: build_basis_reprs(model_params.L, initial)
             required_basis = parse_basis(basis_config['required'])

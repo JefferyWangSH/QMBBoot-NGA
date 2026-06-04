@@ -38,6 +38,12 @@ def build_hamil(params: IsingParams):
     return hamil_op
 
 
+def build_zz(params: IsingParams, r: int):
+    assert 0 <= r <= params.L//2
+    pstr = PauliString.from_str('I'*params.L) if r == 0 else PauliString.from_str('Z' + 'I'*(r-1) + 'Z' + 'I'*(params.L-r-1))
+    return PauliOperator({pstr: 1.})
+
+
 class IsingCompiler:
     L: int
     params: IsingParams
@@ -82,9 +88,7 @@ class IsingCompiler:
     affines: AffineConstraints
     affines_mat: sp.sparse.csr_matrix
 
-    hamil_op: PauliOperator # full hamiltonian operator for computations of stationarity constraints
-    hamil_expr: LinearExpr  # compiled hamiltonian expression
-
+    hamil_op: PauliOperator
     # Hamiltonian terms bucketed by every site in their support
     # for each site, it involves a list of
     # h_sites: tuple of (site, Pauli code)
@@ -92,7 +96,27 @@ class IsingCompiler:
     # h_coeff: Hamiltonian coefficient
     _hamil_terms_at_site: list[list[tuple[tuple[tuple[int, int], ...], int, float | complex]]]
 
-    def __init__(self, params: IsingParams):
+    # SDP objective
+    obj_op: PauliOperator
+    obj_expr: LinearExpr
+    obj_sense: str
+    e_lb: float | None
+    e_ub: float | None
+    energy_ineqs: list[LinearExpr]
+
+    # uncertified observables
+    obs_ops: dict[str, PauliOperator | list[PauliOperator]]
+    obs_exprs: dict[str, LinearExpr | list[LinearExpr]]
+
+    def __init__(self,
+        params: IsingParams,
+        *,
+        obj_op: PauliOperator | None = None,
+        obj_sense: str = 'min',
+        e_lb: float = None,
+        e_ub: float = None,
+        obs_ops: dict | None = None,
+    ):
         self.L = params.L
         self.params = params
         self.ward_ops = {'hamil': 0}
@@ -113,6 +137,26 @@ class IsingCompiler:
             h_sites = tuple(h_sites)
             for site, _ in h_sites:
                 self._hamil_terms_at_site[site].append((h_sites, h_mask, h_coeff))
+
+        if obj_sense not in ('min', 'max'):
+            raise ValueError('objective sense must be min or max')
+        self.obj_sense = obj_sense
+
+        self.obj_op = self.hamil_op if obj_op is None else obj_op
+        if self.obj_op != self.hamil_op:
+            if e_lb is None or e_ub is None:
+                raise ValueError('observable objective requires energy bounds e_lb and e_ub')
+            self.e_lb = e_lb
+            self.e_ub = e_ub
+        else:
+            if self.obj_sense != 'min':
+                raise ValueError('Hamiltonian objective only supports min')
+            if e_lb is not None or e_ub is not None:
+                raise ValueError('Hamiltonian objective does not use energy bounds e_lb or e_ub')
+            self.e_lb = None
+            self.e_ub = None
+
+        self.obs_ops = {} if obs_ops is None else obs_ops.copy()
 
     def trans_canon(self, pstr: PauliString) -> int:
         if not hasattr(self, '_trans_canon_cache'):
@@ -375,14 +419,45 @@ class IsingCompiler:
                 raise ValueError('Pauli string length inconsistent with system size L')
 
         self._build_vars()
+
+        self.obj_expr = self._compile_expr(self.obj_op)
+        if self.obj_expr is None:
+            raise ValueError('current basis cannot represent the SDP objective')
+
+        self.energy_ineqs = []
+        hamil_expr = self._compile_expr(self.hamil_op)
+        if hamil_expr is None:
+            raise ValueError('current basis cannot represent the Hamiltonian')
+
+        if self.e_lb is not None:
+            self.energy_ineqs.append(LinearExpr(
+                terms=hamil_expr.terms.copy(),
+                const=hamil_expr.const - self.e_lb,
+            ))
+        if self.e_ub is not None:
+            self.energy_ineqs.append(LinearExpr(
+                terms={idx: -coeff for idx, coeff in hamil_expr.terms.items()},
+                const=self.e_ub - hamil_expr.const,
+            ))
+
+        self.obs_exprs = {}
+        for name, obs in self.obs_ops.items():
+            if isinstance(obs, list):
+                exprs = []
+                for idx, op in enumerate(obs):
+                    expr = self._compile_expr(op)
+                    if expr is None:
+                        raise ValueError(f'current basis cannot represent observable: {name}[{idx}] = {op}')
+                    exprs.append(expr)
+                self.obs_exprs[name] = exprs
+            else:
+                expr = self._compile_expr(obs)
+                if expr is None:
+                    raise ValueError(f'current basis cannot represent observable: {name} = {obs}')
+                self.obs_exprs[name] = expr
+
         self._build_block_reprs()
         self._build_psd()
-        
-        self.hamil_expr = self._compile_expr(self.hamil_op)
-        # hamiltonian must be representable in the current moment variable space
-        if self.hamil_expr is None:
-            raise ValueError('current basis cannot represent the Hamiltonian')
-        
         self._build_affines()
 
     def descendants(self, pstr: PauliString):
@@ -441,16 +516,35 @@ class IsingCompiler:
             'psd_dims': [psd.dim for psd in self.psd_blocks],
             'affines_raw': self.affines.n_rows,
             'affines_rank': self.affines_mat.shape[0],
-            'hamil_expr': self._get_expr_str(self.hamil_expr),
+            'obj_expr': self._get_expr_str(self.obj_expr),
+            'obj_sense': self.obj_sense,
+            'obs_exprs': {
+                name: [self._get_expr_str(item) for item in expr] if isinstance(expr, list) else self._get_expr_str(expr)
+                for name, expr in self.obs_exprs.items()
+            },
+            'energy_ineqs': [self._get_expr_str(ineq) for ineq in self.energy_ineqs],
         }
 
     def sdp_data(self):
         return SDPData(
             var_cpx = self.var_cpx,
             n_vars = len(self.vars),
-            objective = self.hamil_expr,
+            objective = self.obj_expr,
+            objective_sense = self.obj_sense,
             psd_blocks = self.psd_blocks,
             affines_mat = self.affines_mat,
+            observables = self.obs_exprs,
+            energy_ineqs = self.energy_ineqs,
+        )
+
+    def clone(self):
+        return type(self)(
+            self.params,
+            obj_op=self.obj_op,
+            obj_sense=self.obj_sense,
+            e_lb=self.e_lb,
+            e_ub=self.e_ub,
+            obs_ops=self.obs_ops,
         )
 
 
@@ -488,5 +582,4 @@ if __name__ == '__main__':
     print(*compiler.vars)
 
     print(compiler.hamil_op)
-    print(compiler._get_expr_str(compiler.hamil_expr))
     print(compiler.summary())
