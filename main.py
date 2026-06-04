@@ -178,6 +178,14 @@ class ModelAdapter:
                 for rep in parse_basis(step_event.get('drop', [])):
                     key = rep.trans_canon
                     drop_counts[key] = drop_counts.get(key, 0) + 1
+            # apply the last move
+            if events.get('steps'):
+                basis_map = {rep.trans_canon: rep.trans_canon_rep for rep in basis}
+                for rep in parse_basis(events['steps'][-1].get('drop', [])):
+                    basis_map.pop(rep.trans_canon, None)
+                for rep in parse_basis(events['steps'][-1].get('grow', [])):
+                    basis_map[rep.trans_canon] = rep.trans_canon_rep
+                basis = list(basis_map.values())
         else:
             basis = initial_basis(basis_config['initial'])
             start_step, records = 0, []
@@ -222,6 +230,7 @@ if __name__ == '__main__':
 
     t0 = time.perf_counter()
     for step in range(start_step, start_step + args.steps):
+        step_basis = list(runner.basis_reprs)
         _, record = runner.step()
 
         events['steps'].append({
@@ -229,8 +238,7 @@ if __name__ == '__main__':
             'drop': [str(adapter.get_basis_rep(key)) for key in runner.to_drop],
             'grow': [str(rep.trans_canon_rep) for rep in runner.to_grow],
         })
-        record = record.to_dict()
-        records.append(record)
+        records.append(record.to_dict())
 
         output_state.parent.mkdir(parents=True, exist_ok=True)
         state = {
@@ -248,25 +256,25 @@ if __name__ == '__main__':
 
         output_basis.parent.mkdir(parents=True, exist_ok=True)
         output_basis.write_text(
-            json.dumps([str(rep.trans_canon_rep) for rep in runner.basis_reprs], indent=2)
+            json.dumps([str(rep.trans_canon_rep) for rep in step_basis], indent=2)
         )
 
         print(
             f'[{step:03d}] '
-            f'{record["status"]} '
-            f'value={record["value"]:.12f} | '
-            f'basis={record["basis_reps"]} '
-            f'vars={record["n_vars"]} '
-            f'aff_rank={record["affine_rank"]} '
-            f'psd_dims={sum(record["psd_dims"])} | '
-            f'drop_null={record["drop_null_count"]} '
-            f'grow_null={record["grow_null_count"]} | '
-            f'to_drop={record["to_drop"]} '
-            f'to_grow={record["to_grow"]} '
-            f'net={record["net_growth"]} | '
-            f'compile_s={record["time"]["compile_time"]:.1f} '
-            f'build_s={record["time"]["build_time"]:.1f} '
-            f'solve_s={record["time"]["solve_time"]:.1f} | '
+            f'{record.status} | '
+            f'value={record.value:.12f} | '
+            f'basis={record.basis_reps} '
+            f'vars={record.n_vars} '
+            f'aff_rank={record.affine_rank} '
+            f'psd_dims={sum(record.psd_dims)} | '
+            f'drop_null={record.drop_null_count} '
+            f'grow_null={record.grow_null_count} | '
+            f'to_drop={record.to_drop} '
+            f'to_grow={record.to_grow} '
+            f'net={record.net_growth} | '
+            f'compile_s={record.time["compile_time"]:.1f} '
+            f'build_s={record.time["build_time"]:.1f} '
+            f'solve_s={record.time["solve_time"]:.1f} | '
             f'elapsed_s={time.perf_counter()-t0:.1f}',
             flush=True,
         )
