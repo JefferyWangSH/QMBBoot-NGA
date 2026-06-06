@@ -8,7 +8,6 @@ _sz = sparse.csr_matrix(np.array([[1, 0], [0, -1]], dtype=complex))
 _id = sparse.identity(2, format='csr', dtype=complex)
 _paulis = (_sx, _sy, _sz)
 
-
 def kron(ops):
     ops = tuple(ops)
     if not ops:
@@ -17,7 +16,6 @@ def kron(ops):
     for op in ops[1:]:
         out = sparse.kron(out, op, format='csr')
     return out
-
 
 def hamil(L, J1=1., J2=0.):
     if L < 3:
@@ -40,6 +38,12 @@ def hamil(L, J1=1., J2=0.):
 
     return H / L
 
+def szz(L, vec, r):
+    states = np.arange(1 << L, dtype=np.uint64)
+    sites = np.arange(L, dtype=np.uint64)
+    spins = .5 * (1. - 2. * ((states[:, None] >> sites) & 1))
+    corr = (spins * np.roll(spins, -r, axis=1)).mean(axis=1)
+    return float(np.dot(np.abs(vec) ** 2, corr).real)
 
 def gs(L, J1=1., J2=0., tol=1e-12, vec=False):
     H = hamil(L, J1=J1, J2=J2)

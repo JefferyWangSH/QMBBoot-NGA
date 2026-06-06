@@ -40,6 +40,13 @@ def hamil(L, J=1., h=1., hz=0.):
 
     return H / L
 
+def zz(L, vec, r):
+    states = np.arange(1 << L, dtype=np.uint64)
+    sites = np.arange(L, dtype=np.uint64)
+    spins = 1. - 2. * ((states[:, None] >> sites) & 1)
+    corr = (spins * np.roll(spins, -r, axis=1)).mean(axis=1)
+    return float(np.dot(np.abs(vec) ** 2, corr))
+
 def gs(L, J=1., h=1., hz=0., tol=1e-12, vec=False):
     H = hamil(L, J=J, h=h, hz=hz)
     if vec:

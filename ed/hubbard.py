@@ -78,6 +78,16 @@ def hamil(L: int, t: float = 1., U: float = 4., n_particles: int | None = None):
     dim = len(basis)
     return sparse.csr_matrix((vals, (rows, cols)), shape=(dim, dim), dtype=float)
 
+def szz(L: int, vec, r: int, n_particles: int | None = None):
+    basis = np.array(_sector_basis(L, n_particles), dtype=np.uint64)
+    up_sites = np.arange(0, 2 * L, 2, dtype=np.uint64)
+    dn_sites = up_sites + 1
+    n_up = ((basis[:, None] >> up_sites) & 1).astype(float)
+    n_dn = ((basis[:, None] >> dn_sites) & 1).astype(float)
+    spins = .5 * (n_up - n_dn)
+    corr = (spins * np.roll(spins, -r, axis=1)).mean(axis=1)
+    return float(np.dot(np.abs(vec) ** 2, corr))
+
 def gs(L: int, t: float = 1., U: float = 4., n_particles: int | None = None, tol=1e-12, vec=False):
     H = hamil(L, t=t, U=U, n_particles=n_particles)
     if vec:
