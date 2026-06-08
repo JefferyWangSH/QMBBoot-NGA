@@ -3,6 +3,9 @@ from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import time
+import os
+import sys
+from contextlib import contextmanager
 
 from nga import NGAParams, NGARunner
 
@@ -201,6 +204,25 @@ class ModelAdapter:
         return type(self.basis[0])(self.model_params.L, key).trans_canon_rep
 
 
+@contextmanager
+def redirect_log(log):
+    sys.stdout.flush()
+    sys.stderr.flush()
+    stdout_fd = os.dup(1)
+    stderr_fd = os.dup(2)
+    try:
+        os.dup2(log.fileno(), 1)
+        os.dup2(log.fileno(), 2)
+        yield
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(stdout_fd, 1)
+        os.dup2(stderr_fd, 2)
+        os.close(stdout_fd)
+        os.close(stderr_fd)
+
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
@@ -208,9 +230,12 @@ if __name__ == '__main__':
     parser.add_argument('--output-dir', type=Path, default=Path('.'))
     parser.add_argument('--resume', type=Path, default=None)
     parser.add_argument('--steps', type=int, default=10)
+    parser.add_argument('--verbose', action='store_true')
     args = parser.parse_args()
 
     adapter = ModelAdapter.load(args.config, args.resume)
+    if args.verbose:
+        adapter.nga_params.solver_kwargs['verbose'] = True
     output_basis = args.output_dir / 'basis.json'
     output_state = args.output_dir / 'state.json'
     output_events = args.output_dir / 'events.json'
@@ -228,10 +253,28 @@ if __name__ == '__main__':
     events = adapter.events
     records = adapter.records
 
+    if args.verbose:
+        solver_log = args.output_dir / 'solver.log'
+        solver_log.parent.mkdir(parents=True, exist_ok=True)
+        solver_log.unlink(missing_ok=True)
+
     t0 = time.perf_counter()
     for step in range(start_step, start_step + args.steps):
         step_basis = list(runner.basis_reprs)
-        _, record = runner.step()
+        if not args.verbose:
+            _, record = runner.step()
+        else:
+            with solver_log.open('a') as log:
+                print(
+                    ('' if step == start_step else '\n\n')
+                    + '@' * 79 + '\n'
+                    + f' NGA STEP {step:03d} '.center(79, ' ') + '\n'
+                    + '@' * 79 + '\n',
+                    file=log,
+                    flush=True,
+                )
+                with redirect_log(log):
+                    _, record = runner.step()
 
         events['steps'].append({
             'step': step,
