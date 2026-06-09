@@ -36,39 +36,61 @@ If we define $M_{ij}\overset{!}{=}\trace\left[\rho O_i^\dag O_j\right]=\langle O
 
 * $\rho^\dag = \rho$ yields $\langle O_i^\dag O_j\rangle^\ast = \langle O_j^\dag O_i\rangle$ such that $M$ is a hermitian.
 
-In practice, one reduces the number of independent moment expectations in $M_{ij}$ using *symmetries* and other physics-insighted constraints and can, in principle, sample them to check whether $M$ is a PSD matrix. This generates a set of feasible regions for the operator spectrum, including the energy. By considering increasingly large operator bases $\{O_i\}$, the result of the optimization problem approaches the exact value, yielding a hierarchy of estimations. Moreover, assuming symmetries, e.g. translational invariance, further helps reduce the moment matrix into symmetry blocks, which dramatically saves computational time.
+In practice, one reduces the number of independent moment expectations in $M_{ij}$ using *symmetries* and other physics-insighted constraints. This generates a set of feasible regions for the moment vector, including the energy expectation whenever $H$ is represented in the chosen operator algebra. The relaxed feasible region is usually larger than the true physical set. Therefore minimizing the linear energy functional over this region gives a certified lower bound,
+$$
+    E_\mathrm{boot} = \min_{\substack{M\succeq 0,\\[1pt] \mathrm{other\ constraints}}} \langle H\rangle \leq E_0.
+$$
+By considering increasingly large operator bases $\{O_i\}$, one imposes more positivity constraints and shrinks the feasible region. The resulting lower bounds form a hierarchy that improves toward the exact value in the complete-basis limit. Moreover, symmetries, e.g. translational invariance, further help reduce the moment matrix into symmetry blocks, which dramatically saves computational time.
 
-*Complexity:*
+#### *1.0. Complexity*
+After choosing an operator basis, the bootstrap problem becomes a semidefinite program of the form
+$$
+    \min_{\mathbf{x}}\left(\mathbf{c}^T\mathbf{x}\right)
+    \quad \text{s.t.}\quad
+    A\mathbf{x}=\mathbf{b}, \quad
+    M_\ell(\mathbf{x})\succeq 0,\quad \ell=1,\dots,B,
+$$
+where $\mathbf{x}$ is the vector of independent moment variables and $M_\ell$ are PSD blocks of sizes $d_\ell$. Thus the numerical cost is controlled by the number of variables, the number of affine constraints, the PSD block sizes $\{d_\ell\}$, and the sparsity of the affine maps, rather than directly by the many-body Hilbert-space dimension.
 
-$\text{\color{red}todo}$
+For first-order conic solvers (e.g. SCS), a typical per-iteration bottleneck is the projection onto PSD cones, which requires diagonalizing the PSD blocks and scales roughly as
+$$
+    \sum_{\ell=1}^B O(d_\ell^3),
+$$
+together with sparse matrix-vector operations for the affine constraints. Interior-point solvers (e.g. MOSEK) have stronger polynomial scaling because each iteration forms and solves a Schur-complement/KKT system.
+
+This is why symmetry blocking is crucial. A single PSD matrix of size $D$ has projection cost $O(D^3)$ and dense storage $O(D^2)$. If symmetry decomposes it into blocks of sizes $d_\ell$ with $\sum_\ell d_\ell=D$, the cost becomes controlled by $\sum_\ell d_\ell^3$, which can be much smaller than $D^3$. For example, translation symmetry turns one $LN\times LN$ translated moment matrix into $L$ momentum blocks of size $N$, reducing the PSD projection cost from $O(L^3N^3)$ to $O(LN^3)$. Additional parity or internal-symmetry blocks further reduce the block sizes.
 
 #### *1.1. Symmetry constraints*
-Suppose a Hamiltonian $H$ has a symmetry operation $g$. For a unitary symmetry, $g^{-1}Hg=H$. For an antiunitary symmetry, such as complex conjugation $\ksymm$ or time reversal $\mathcal{T}$, the same formal condition is written as $\ksymm^{-1}H\ksymm=H$ with the important caveat that $\ksymm^{-1} i \ksymm=-i$.
+In finite-size systems, the ground state of a symmetric Hamiltonian is often itself a symmetric state, especially when the ground state is unique. Even for phases that spontaneously break a symmetry in the thermodynamic limit, choosing a symmetric density matrix does not change the ground-state energy: if $H$ is invariant under a symmetry group $G$, one can average any ground-state density matrix over the group,
+$$
+    \rho_\mathrm{sym} = \int_G dg\, g^{-1}\rho g,
+$$
+and obtain $\rho_\mathrm{sym}$ with the same energy. Therefore, for energy bootstrap purposes, it is natural to work with a $G$-symmetric $\rho$, while remembering that symmetry-breaking order parameters must then be detected through symmetry-invariant observables such as two-point correlations.
 
-A density matrix $\rho$ is symmetric under $g$ if $g^{-1}\rho g=\rho$ and a thermal density matrix $\rho\sim e^{-\beta H}$ is definitely symmetric. However, assuming that $\rho$ remains symmetric at zero temperature (ground state) is no longer a trivial statement.
+For a symmetric density matrix, the expectation value of an operator $O$ only depends on the component of $O$ projected to the $G$-invariant operator subspace,
 $$
-    H\ket{\psi_0} = E_0\ket{\psi_0}, \quad H g\ket{\psi_0} = E_0 g\ket{\psi_0}.
+    \langle O\rangle
+    = \trace\left[\rho_\mathrm{sym} O\right]
+    = \trace\left[\rho O_G\right],
+    \quad
+    O_G = \int_G dg\, g^{-1} O g.
 $$
-If a system has a unique ground state, $g\ket{\psi_0}=e^{i\theta_g}\ket{\psi_0}$. As a result, the density matrix $\rho_0=\ket{\psi_0}\bra{\psi_0}$ is strictly invariant $g^{-1}\rho_0 g = \rho_0$. If the ground state is degenerate (symmetry breaking), an individual pure ground state need not be symmetric. A symmetry operation may map one ground state to another $g\ket{\psi_a}=\ket{\psi_b}$ and a symmetry-broken pure state can have a nonzero expectation value for a symmetry-odd order parameter. However, one can always construct a symmetric ground-state density matrix by averaging over the symmetry orbit,
+Equivalently, if $O$ is completely orthogonal to the trivial representation of $G$, then $O_G=0$ and $\langle O\rangle=0$. A concrete example is fermion parity $P_f = (-1)^N$. An operator with fermion parity $q=0,1$ satisfies
 $$
-    \rho_\text{sym} = \frac{1}{\vert G\vert} \sum_{g\in G} g^{-1} \rho g.
+    P_f^{-1} O_q P_f = (-1)^q O_q.
 $$
-This symmetrized density matrix has the same energy as $\rho$. Therefore, for ground-state energy optimization, restricting to symmetric density matrices is usually without loss. The limitation is that symmetry-odd one-point order parameters vanish in $\rho_\text{sym}$, so spontaneous symmetry breaking must be diagnosed through symmetric observables such as two-point correlation functions, or by explicitly relaxing the symmetry constraint.
+The group average over $\{1,P_f\}$ gives
+$$
+    (O_q)_G = \frac12\left(O_q + P_f^{-1}O_qP_f\right)
+    = \frac12\left[1+(-1)^q\right]O_q.
+$$
+Thus only fermion-parity-even operators survive the projection, while parity-odd operators, such as a single fermion operator, have zero one-point expectation value in a parity-symmetric density matrix. At the moment-matrix level, $\langle O_i^\dag O_j\rangle$ vanishes when $O_i$ and $O_j$ are fermion-parity eigenoperators and carry different fermion parity, which is why the PSD matrix can be block diagonalized by parity sectors. In bootstrap language, discrete symmetry operations therefore give a set of equivalent expectation values and zero constraints,
+$$
+    \left\langle O\right\rangle = \trace\left[\rho_\mathrm{sym} O\right] = \trace\left[g^{-1}\rho_\mathrm{sym} g O\right] = \left\langle g O g^{-1}\right\rangle.
+$$
+for arbitrary operator $O$.
 
-> However, for finite-size systems, this issue should be interpreted carefully.
->
-> In a phase that spontaneously breaks a discrete symmetry, the finite-size ground state is often a symmetric “cat” state rather than one of the symmetry-broken states. The symmetry-broken states emerge only in the thermodynamic limit, where a set of symmetry-related low-energy states become degenerate. For a discrete broken symmetry, the splitting between these quasi-degenerate states is typically exponentially small in system size. Consequently, for finite-size ground-state energy bounds, the symmetric-$\rho$ assumption is generally safe. The ordered phase can still be detected through symmetry-invariant quantities such as two-point correlations in the symmetric density matrix.
->
-> There are exceptions where finite-size degeneracy is exact, for example due to an exact conserved quantum number, Kramers degeneracy, fine tuning, or topological order. In such cases, an individual pure ground state need not be symmetric, but a symmetric ground-state density matrix can still be constructed by averaging over the degenerate manifold, without changing the energy.
->
-> For continuous symmetry breaking, the finite-size precursor is often an Anderson tower of states, where low-energy states in different symmetry sectors collapse onto the ground state algebraically with system size. [?]
->
-
-In the bootstrap SDP, we explicitly assume a $G$-symmetric density matrix. For a pure state, this implies that the state must transform within a definite symmetry sector; however, for a mixed state, it allows the classical mixture of different quantum number sectors. Evaluating moment expectations in a symmetric density matrix yields constraints
-$$
-    \left\langle O\right\rangle = \trace\left[\rho O\right] = \trace\left[g^{-1}\rho g O\right] = \left\langle g O g^{-1}\right\rangle.
-$$
-for arbitrary operator $O$. For a discrete symmetry, $g$ enumerates over all group elements. For a continuous unitary symmetry, the same statement can be written infinitesimally. Let $g(\theta)=e^{i\theta Q}$ where $Q$ is Lie generator (symmetry charge). The symmetry condition on the density matrix is equivalently formulated as $\left[\rho, Q\right] = 0$, and we have
+For continuous symmetries, the same equivalence relations can be written infinitesimally as Ward identities. If $g(\theta)=e^{i\theta Q}$ and $Q$ is Lie generator (symmetry charge), the symmetry condition on the density matrix is equivalently formulated as $\left[\rho, Q\right] = 0$. Then symmetry implies
 $$
     \left\langle O\right\rangle = \left\langle e^{i\theta Q} O e^{-i\theta Q}\right\rangle \overset{\theta\ll 1}{\implies} \left\langle \left[Q,O\right]\right\rangle=0,
 $$
@@ -76,39 +98,113 @@ which are known as Ward-identity constraints associated with the continuous symm
 $$
     \left\langle \left[H,O\right]\right\rangle = 0,
 $$
-given stationary states $[\rho,H]=0$. These constraints are often known as stationarity constraints. In practice, a good starting point is to generate constraints from moment operators $O=O_i^\dag O_j$.
+given stationary states $[\rho,H]=0$. These constraints are often known as stationarity constraints.
 
 <a id="symmetry-blocks"></a>
 #### *1.2. Symmetry blocks*
-On many occasions, the system is invariant under translation $T(r)$ and we assume the density matrix does not break this symmetry such that $\left[\rho,T(r)\right]=0$. For bootstrap, we choose a set of translation representatives $\{O_a\}$ and build the full basis through translation,
+
+The PSD moment matrix has a special structure because its entries are expectations of operator products,
 $$
-    \left\{O_a(r): T^\dag(r)O_a(0) T(r)\right\}.
+    M_{ij}=\langle O_i^\dag O_j\rangle.
 $$
-The moment matrix is constructed as
+If the density matrix is $G$-symmetric, then only the trivial-representation component of $O_i^\dag O_j$ can contribute. Equivalently, after choosing a symmetry-adapted operator basis, the moment matrix can be organized by irreducible representations of $G$.
+
+Let the operator space decompose as
 $$
-\begin{aligned}
-    M_{ar,br'}
-    & \overset{!}{=} \left\langle O_a^\dag(r) O_b(r')\right\rangle
-    = \left\langle T^\dag(r) O^\dag_a(0) T(r-r') O_b(0) T(r')\right\rangle\\[10pt]
-    & = \trace\left[\underbrace{T(r') \rho T^\dag(r')}_{\rho} \underbrace{T^\dag(r-r') O^\dag_a(0) T(r-r')}_{O_a^\dag(r-r')} O_b(0)\right]\\[10pt]
-    & = \left\langle O_a^\dag(r-r') O_b(0)\right\rangle \overset{!}{=} M_{ab}(r-r').
-\end{aligned}
+    \mathcal{V}=\bigoplus_\lambda \left(\mathbb{C}^{m_\lambda}\otimes V_\lambda\right),
 $$
-Therefore $M$ is intrinsically a $L\times L$ block matrix with each block a $N\times N$ matrix where $N=\text{dim}(\{O_a\})$. To be more specific,
+where $V_\lambda$ is an irreducible representation and $m_\lambda$ is its multiplicity. Choosing operators $O_{\lambda,a,\alpha}$ with copy index $a$ and irrep index $\alpha$, the symmetry action is
 $$
-    M = \begin{pmatrix}
-        M_0     & M^\dag_1 & M^\dag_2 & \cdots & M^\dag_{L-1}\\[5pt]
-        M_1     & M_0      & M^\dag_1 & \ddots & \vdots      \\[5pt]
-        M_2     & M_1      & M_0      & \ddots & \vdots      \\[5pt]
-        \vdots  & \ddots   & \ddots   & \ddots & \vdots      \\[5pt]
-        M_{L-1} & \cdots   & \cdots   & \cdots & M_0 
-    \end{pmatrix}.
+    g^{-1}O_{\lambda,a,\alpha}g
+    = \sum_\beta D^{(\lambda)}_{\beta\alpha}(g) O_{\lambda,a,\beta}.
 $$
-$M_0$ is a $N\times N$ hermitian while $M_1,\dots,M_{L-1}$ are not necessarily hermitians. $M$ is ready to be block diagonalized by switching to the momentum space through discrete Fourier transformation $O_a(k)=\frac{1}{\sqrt{L}}\sum_r O_a(r) e^{-ikr}$ and $k\in\{k_n=\frac{2\pi n}{L}, 0\leqslant n<L\}$. We obtain
+The invariant moment form satisfies
 $$
-    \left\langle O^\dag_a(k) O_b(k')\right\rangle = \delta_{kk'} \sum_r e^{ikr} \left\langle O^\dag_a(r) O_b(0)\right\rangle,
+    M = D(g)^\dag M D(g), \quad \forall g\in G.
 $$
-and $F^\dag M F=\bigoplus_k M(k)$. The PSD constraint $M\succcurlyeq 0$ is hence equivalent to $M(k)\succcurlyeq 0$ for all $k$ since Fourier transformation $F$ is unitary. In practice, solving SDP with $L$ number of small $M(k)$ is much more efficient than that with a large $M$; and one may involve more other symmetris to further simplify $M(k)$. We note that larger system size $L$ only provides linearly more PSD blocks, whose size is determined by the dimension of chosen basis but not $L$.
+By Schur's lemma, matrix elements between inequivalent irreducible representations vanish, while equivalent copies may still mix, i.e.
+$$
+    M = \bigoplus_\lambda \left(A_\lambda\otimes I_{\dim V_\lambda}\right),
+$$
+where $A_\lambda$ acts on the multiplicity space. Thus the original PSD constraint is equivalent to independent PSD constraints on the smaller blocks $A_\lambda$. This irrep-level block diagonalization assumes that the operator space has already been rotated into a symmetry-adapted basis $\mathcal{V}$. For a generic Pauli-string or Majorana-monomial basis, such a unitary transformation can be dense and computationally unfavorable since it destroys the sparse product structure of local operator strings. (Moment entries that were compiled from products $O_i^\dag O_j$ may become dense sums of many operator products, increasing time cost and memory use during both compilation and SDP solving.)
+
+For Abelian symmetries this structure is especially simple because every irreducible representation is one-dimensional and labeled by a character, or charge. If
+$$
+    g^{-1}O_a g = \chi_a(g) O_a,
+$$
+then
+$$
+    g^{-1}(O_a^\dag O_b)g = \chi_a(g)^\ast\chi_b(g) O_a^\dag O_b.
+$$
+Equivalently, the group-averaged projection of this moment operator is
+$$
+    \left(O_a^\dag O_b\right)_G
+    = \int_G dg\, g^{-1}\left(O_a^\dag O_b\right)g
+    = \left[\int_G dg\, \chi_a(g)^\ast\chi_b(g)\right] O_a^\dag O_b.
+$$
+Character orthogonality gives
+$$
+    \int_G dg\, \chi_a(g)^\ast\chi_b(g) = \delta_{\chi_a,\chi_b},
+$$
+with the normalized Haar measure, or the normalized finite-group sum. Hence $O_a^\dag O_b$ has a nonzero invariant projection only when $\chi_a=\chi_b$. Since a symmetric density matrix only sees the invariant component, the moment entry $\langle O_a^\dag O_b\rangle$ vanishes between different Abelian charge sectors. Therefore the PSD matrix becomes block diagonal by Abelian charges. This is the logic behind constructing parity and momentum blocks.
+
+> Pauli strings and Majorana monomials are already parity eigenoperators, so parity blocking mostly amounts to sorting by charge. Momentum blocks require a Fourier transform, but each $O_a(k)$ only mixes the $L$ translations of a single representative $O_a$, rather than all $L\times N$ translated basis elements.
+
+In practice, even when the full symmetry is larger or non-Abelian, it is often convenient to use discrete Abelian subgroups or commuting Abelian charges to obtain block decompositions with minimal implementation overhead.
+
+#### *1.3. Translation*
+Translation is a finite Abelian symmetry. For a periodic chain of length $L$,
+$$
+    G=\{T(s),\ s=0,\dots,L-1\},
+$$
+with one-dimensional characters $\chi_k(s)=e^{iks}$ and $k=2\pi n/L$. Starting from a translation representative $O_a(0)$, define
+$$
+    O_a(r)=T^\dag(r)O_a(0)T(r), \quad
+    O_a(k)=\frac{1}{\sqrt L}\sum_{r=0}^{L-1} e^{-ikr}O_a(r).
+$$
+Then $T^\dag(s)O_a(k)T(s)=e^{iks}O_a(k)$, so $O_a(k)$ carries Abelian charge $k$. Character orthogonality gives
+$$
+    \left\langle O_a^\dag(k)O_b(k')\right\rangle=0,\quad k\ne k',
+$$
+and the translated moment matrix decomposes as
+$$
+    F^\dag M F=\bigoplus_k M(k).
+$$
+Equivalently, the large PSD constraint $M\succcurlyeq 0$ is replaced by independent constraints $M(k)\succcurlyeq0$ for all $k$ since Fourier transformation $F$ is unitary. The block entries are
+$$
+    M_{ab}(k)=\sum_{r=0}^{L-1}e^{ikr}\left\langle O_a^\dag(r)O_b(0)\right\rangle.
+$$
+This Fourier transform only mixes the $L$ translated copies of each representative, not all $L\times N$ translated basis elements. In practice, solving SDP with $L$ number of small $M(k)$ is much more efficient than that with a large $M$; and one may involve more other symmetries to further simplify $M(k)$. We note that larger system size $L$ only provides linearly more PSD blocks, whose size is determined by the dimension of chosen basis but not $L$.
+
+> To get our hands dirty, let us rederive the momentum block structure from scratch. Choose a set of translation representatives $\{O_a\}$ and build the full basis through translation,
+> $$
+>     \left\{O_a(r): T^\dag(r)O_a(0) T(r)\right\}.
+> $$
+> The moment matrix is constructed as
+> $$
+> \begin{aligned}
+>     M_{ar,br'}
+>     & \overset{!}{=} \left\langle O_a^\dag(r) O_b(r')\right\rangle
+>     = \left\langle T^\dag(r) O^\dag_a(0) T(r-r') O_b(0) T(r')\right\rangle\\[10pt]
+>     & = \trace\left[\underbrace{T(r') \rho T^\dag(r')}_{\rho} \underbrace{T^\dag(r-r') O^\dag_a(0) T(r-r')}_{O_a^\dag(r-r')} O_b(0)\right]\\[10pt]
+>     & = \left\langle O_a^\dag(r-r') O_b(0)\right\rangle \overset{!}{=} M_{ab}(r-r').
+> \end{aligned}
+> $$
+> Therefore $M$ is intrinsically a $L\times L$ block matrix with each block a $N\times N$ matrix where $N=\text{dim}(\{O_a\})$. To be more specific,
+> $$
+>     M = \begin{pmatrix}
+>         M_0     & M^\dag_1 & M^\dag_2 & \cdots & M^\dag_{L-1}\\[5pt]
+>         M_1     & M_0      & M^\dag_1 & \ddots & \vdots      \\[5pt]
+>         M_2     & M_1      & M_0      & \ddots & \vdots      \\[5pt]
+>         \vdots  & \ddots   & \ddots   & \ddots & \vdots      \\[5pt]
+>         M_{L-1} & \cdots   & \cdots   & \cdots & M_0
+>     \end{pmatrix}.
+> $$
+> $M_0$ is a $N\times N$ hermitian while $M_1,\dots,M_{L-1}$ are not necessarily hermitians. $M$ is ready to be block diagonalized by switching to the momentum space through discrete Fourier transformation $O_a(k)=\frac{1}{\sqrt{L}}\sum_r O_a(r) e^{-ikr}$ and $k\in\{k_n=\frac{2\pi n}{L}, 0\leqslant n<L\}$. We obtain
+> $$
+>     \left\langle O^\dag_a(k) O_b(k')\right\rangle
+>     = \delta_{kk'} \sum_r e^{ikr} \left\langle O^\dag_a(r) O_b(0)\right\rangle.
+> $$
 
 Refer to:
 * https://arxiv.org/pdf/2406.17844 : extensive benchmark on TFIM
@@ -664,7 +760,31 @@ $$
     H = \frac{t}{2} \sum_{i,\sigma} \gamma^T_{i,\sigma} Y \gamma_{i+1,\sigma} - \frac{U}{4} \sum_{i} \gamma^1_{i\uparrow} \gamma^2_{i\uparrow} \gamma^1_{i\downarrow} \gamma^2_{i\downarrow}.
 $$
 
-#### *6.1. $U(1)$ symmetry and Fermion parity*
+#### *6.1. Fermion parity*
+Fermion parity $P=(-1)^N=e^{i\pi N}$ is the nontrivial element of the $\mathbb{Z}_2$ subgroup $\{1,P\}$ of the charge $U(1)$ symmetry. Fermion parity can remain a symmetry even when the full $U(1)$ symmetry is absent, as in pairing Hamiltonians where particle number changes by pairs. The superselection principle claims that coherent superpositions between opposite parity sectors are not physical (while classical mixtures of opposite-parity states are permitted). For example, BCS wave function mixes states with different particle numbers yet still with same parity, and there is no spontaneous $P$-broken states observed in laboratory. Equivalently, every physical $\rho$ must commute with fermion parity, $[\rho,P]=0$, such that $\langle O\rangle = \langle P^{-1} O P\rangle$ for any operator $O$. In our case, individual Majorana fermion is parity-odd, $P^{-1}\gamma_a P=-\gamma_a$. Therefore a Majorana monomial $\Gamma=\prod\gamma_i^a$ with degree $q$ transforms as $P^{-1} \Gamma P = (-1)^q \Gamma$. As a result, odd-degree monomial moments must have vanishing expectation value according to the parity constraint,
+$$
+    \left\langle \Gamma\right\rangle
+    = \left\langle P^{-1} \Gamma P\right\rangle
+    = -\left\langle \Gamma\right\rangle,
+    \quad\text{s.t.}\quad
+    \left\langle \Gamma\right\rangle = 0.
+$$
+In short, Majorana monomials are eigenoperators with definite fermion parity, thus parity-odd monomials have zero projection to the invariant operator subspace and hence zero expectation value in a parity-symmetric state.
+
+For the spinful Hubbard model, we use a finer spin-resolved fermion-parity symmetry,
+$$
+    P_\uparrow=(-1)^{N_\uparrow}, \quad
+    P_\downarrow=(-1)^{N_\downarrow}.
+$$
+This gives a $\mathbb{Z}_{2,\uparrow}\times\mathbb{Z}_{2,\downarrow}$ subgroup of
+$
+  U_\uparrow(1)\times U_\downarrow(1)
+  \simeq
+  \frac{U_c(1)\times U_s(1)}{\mathbb{Z}_2}
+$.
+A Majorana monomial has a definite spin-parity charge $(p_\uparrow,p_\downarrow)$, determined by the numbers of up- and down-spin Majoranas modulo two. Averaging over $P_\uparrow$ and $P_\downarrow$ projects out monomial expectations unless $(p_\uparrow,p_\downarrow)=(0,0)$. At the moment-matrix level, $\langle O_i^\dag O_j\rangle$ vanishes unless $O_i$ and $O_j$ carry the same spin-parity charge. Therefore the Hubbard bootstrap can reduce independent Majorana moment variables to the spin-parity-even sector and decompose PSD matrices into spin-parity blocks.
+
+#### *6.2. $U(1)$ charge symmetry*
 The particle number $N$ is the conserved charge generating the global $U(1)$ symmetry, $U(\theta)=e^{i\theta N}$. It acts on fermion operators as
 $$
     U(\theta)c U(\theta)^{-1}=e^{-i\theta} c, \quad U(\theta)c^\dag U(\theta)^{-1}=e^{i\theta}c^\dag.
@@ -680,35 +800,85 @@ $$
     \end{pmatrix}
     \begin{pmatrix}\gamma_1\\ \gamma_2\end{pmatrix}.
 $$
-The fermion parity operator $P=(-1)^N$ is the special group element at $\theta=\pi$. Thus fermion parity is the $\mathbb{Z}_2$ subgroup of the particle-number $U(1)$ symmetry. Fermion parity can remain a symmetry even when the full $U(1)$ symmetry is absent, as in pairing Hamiltonians where particle number changes by pairs.
-
-The superselection principle claims that coherent superpositions between opposite parity sectors are not physical (while classical mixtures of opposite-parity states are permitted). For example, BCS wave function mixes states with different particle numbers yet still with same parity, and there is no spontaneous $P$-broken states observed in laboratory. Equivalently, every physical $\rho$ must commute with fermion parity, $[\rho,P]=0$, such that $\langle O\rangle = \langle P^{-1} O P\rangle$ for any operator $O$. In our case, each Majorana fermion is parity-odd, $P^{-1}\gamma_a P=-\gamma_a$. Therefore a Majorana monomial $\Gamma=\prod\gamma_i^a$ with degree $q$ transforms as $P^{-1} \Gamma P = (-1)^q \Gamma$. As a result, odd-degree monomial moments must have vanishing expectation value according to the parity constraint,
-$$
-    \left\langle \Gamma\right\rangle = \left\langle P^{-1} \Gamma P\right\rangle = -\left\langle \Gamma\right\rangle, \quad\text{s.t.}\quad \left\langle \Gamma\right\rangle = 0.
-$$
-
-Moreover, assuming the full $U(1)$ symmetry $[\rho,N]=0$ gives stronger Ward identities $\langle[N,\Gamma]\rangle=0$, which remove all operators carrying nonzero particle-number charge, including pairing moments such as $\langle c_i c_j\rangle$. Since Majorana moments are generally not eigenoperators of $U(1)$ operations, the $U(1)$ selection rule is not simply implemented by discarding individual Majorana monomials. Instead, the $U(1)$ constraints can be generated by directly computing the Ward identities, analogously to stationarity constraints.
-
-For the spinful Hubbard Hamiltonian, the spin-up and spin-down particle numbers are separately conserved. Therefore we actually have a $U_\uparrow(1)\times U_\downarrow(1)$ symmetry, and also $P_\uparrow\times P_\downarrow$. The parity constraints eliminate monomial moments containing an odd number of Majoranas for each spin, and the full continuous symmetries yield Ward identities $\left\langle[N_\sigma, \Gamma]\right\rangle=0$ for each spin $\sigma$.
+The fermion parity operator $P=(-1)^N$ is the special group element at $\theta=\pi$. Assuming the full $U(1)$ symmetry $[\rho,N]=0$ gives stronger Ward identities $\langle[N,\Gamma]\rangle=0$. In a charge-eigenoperator basis, $[N,O_q]=qO_q$ implies $q\langle O_q\rangle=0$, so all nonzero-charge components have vanishing expectation, including pairing components such as $\langle c_i c_j\rangle$. However, the continuous $U(1)$ charge symmetry does not provide a simple selection rule at the individual Majorana-monomial level. A Majorana monomial generally mixes creation and annihilation operators and is not an eigenoperator under $U(1)$ transformations. Therefore we cannot efficiently prune variables by directly inspecting whether a Majorana monomial violates $U(1)$ charge conservation. Instead, the $U(1)$ constraints are imposed indirectly through Ward identities.
 
 Note that $[\rho,N]=0$ only forbids coherent superpositions between different charge sectors. And it still permits a classical mixture of states with different particle numbers. To fix the filling and compare directly with ED, we further impose $\left\langle N\right\rangle=N_0$ and $\left\langle(N-N_0)^2\right\rangle=0$.
 
-#### *6.2. Complex conjugation $\ksymm$*
+For the spinful Hubbard Hamiltonian, the spin-up and spin-down particle numbers are separately conserved. Therefore we actually have a $U_\uparrow(1)\times U_\downarrow(1) \simeq \frac{U_c(1)\times U_s(1)}{\mathbb{Z}_2}$ symmetry. The full continuous symmetries yield Ward identities $\left\langle[N_\sigma, \Gamma]\right\rangle=0$ for each spin $\sigma$. Equivalently, at the Lie-algebra level one can use the charge and spin generators
+$$
+    N=N_\uparrow+N_\downarrow,
+    \quad
+    S^z=\frac12(N_\uparrow-N_\downarrow),
+$$
+and
+$$
+    \mathfrak{u}_\uparrow(1)\oplus\mathfrak{u}_\downarrow(1)
+    = \mathfrak{u}_c(1)\oplus\mathfrak{u}_s(1).
+$$
+Thus Ward identities generated by $(N_\uparrow,N_\downarrow)$ are equivalent to those generated by $(N,S^z)$. At the group-element level, the charge-spin parametrization has a $\mathbb{Z}_2$ redundancy because $e^{i\pi N}=e^{i2\pi S^z}=(-1)^N$, giving $U_\uparrow(1)\times U_\downarrow(1) \simeq \frac{U_c(1)\times U_s(1)}{\mathbb{Z}_2}$. This global quotient is irrelevant for Ward identities, which only depend on infinitesimal generators.
+
+#### *6.3. Complex conjugation $\ksymm$*
 The Hubbard model stays invariant under complex conjugation $\ksymm$, which is an anti-unitary symmetry with $\ksymm^2=1$ and
 $$
     \ksymm i\ksymm = -i, \quad \ksymm c_{i\sigma}\ksymm = c_{i\sigma}, \quad \ksymm c^\dag_{i\sigma}\ksymm = c^\dag_{i\sigma}.
 $$
-Majorana fermions transform accordingly as $\ksymm \gamma_a\ksymm = \eta_a \gamma_a$ with $\eta_1=1$ and $\eta_2=-1$. The $\ksymm$-parity of a Majorana monomial is thus determined by counting the number of $\gamma_2$ and further taking into account the hermitian phase when the monomial is hermitianized. Anyway, a similar optimization can be made as compared to the Ising model including pruning $\ksymm$-odd monomials from variables, identifying dependent PSD blocks with opposite momentum, and using only $\ksymm$-odd monomials for building Ward identities with $\ksymm$-even generators such as $H$ and $N$.
+Majorana fermions transform accordingly as $\ksymm \gamma_a\ksymm = \eta_a \gamma_a$ with $\eta_1=1$ and $\eta_2=-1$. The $\ksymm$-parity of a Majorana monomial is thus determined by counting the number of $\gamma_2$ and further taking into account the hermitian phase when the monomial is hermitianized. Anyway, a similar optimization can be made as compared to the Ising model, including pruning $\ksymm$-odd monomials from variables, identifying dependent PSD blocks with opposite momentum, and using only $\ksymm$-odd monomials for building Ward identities with $\ksymm$-even generators such as $H$ and $N$.
 
 The assumed $\ksymm$-invariance of $\rho$ forbids the direct detection of non-zero current expectation values, such as charge and spin currents, $j^c\sim \sum_\sigma i(c^\dag_{x+1,\sigma}c_{x,\sigma}-c^\dag_{x,\sigma}c_{x+1,\sigma})$ and $j^s\sim \sum_\sigma i\sigma (c^\dag_{x+1,\sigma}c_{x,\sigma}-c^\dag_{x,\sigma}c_{x+1,\sigma})$, since both of them are $\ksymm$-odd operators. However, current-current correlations are $\ksymm$-even and therefore computable. A non-zero $\langle j^c\rangle$ also breaks time-reversal symmetry while $\langle j^s\rangle$ need not.
 
-#### *6.3. Spin $SU(2)$*
-todo: further rotate $M(k)$ to spin irreps.
+#### *6.4. Spin $SU(2)$*
+Spin rotations form a full $SU(2)$ symmetry,
+$$
+    S^a=\frac12\sum_x c^\dag_{x\alpha}\sigma^a_{\alpha\beta}c_{x\beta},
+    \quad a=x,y,z.
+$$
+If the density matrix is spin-rotation invariant, $[\rho,S^a]=0$, then only the spin-singlet component of an operator contributes to its expectation value,
+$$
+    \langle O\rangle=\trace\left[\rho O_{SU(2)}\right],
+    \quad
+    O_{SU(2)}=\int_{g\in SU(2)} dg\, U_g^{-1} O U_g.
+$$
+Thus the invariant operator subspace consists of spin scalars, $J=0$, for example density operators, spin-summed hopping terms $\sum_\sigma c^\dag_{i\sigma}c_{j\sigma}$, double occupancy, and spin correlations $\mathbf S_i\cdot\mathbf S_j$. Spin-vector operators such as $S_i^a$ or $c^\dag_{i\uparrow}c_{j\downarrow}$ have no singlet component and vanish in a spin-symmetric state. However, vector products can still have singlet projections, e.g. $\langle S_i^aS_j^b\rangle=\frac{\delta_{ab}}{3}\langle\mathbf S_i\cdot\mathbf S_j\rangle$, so $S_i^xS_j^x$ correlations remain accessible through the scalar correlation. Spin Ward identities are given by
+$$
+    \left\langle [S^a,\Gamma]\right\rangle=0,
+    \quad a=x,y,z.
+$$
+Equivalently one may use
+$$
+    S^z=\frac12(N_\uparrow-N_\downarrow),
+    \quad
+    S^+=\sum_x c^\dag_{x\uparrow}c_{x\downarrow},
+    \quad
+    S^-=\sum_x c^\dag_{x\downarrow}c_{x\uparrow}.
+$$
+The $S^z$ Ward identity is already contained in the $U_\uparrow(1)\times U_\downarrow(1)$ Ward identities, while $S^\pm$ produce additional spin-flip linear constraints. We avoid full spin-irrep PSD blocking because it requires dense rotations of the Majorana basis.
 
-#### *6.4. Time reversion*
+#### *6.5. Spin permutation*
+Spin permutation $\mathcal{P}_{ud}:\uparrow\leftrightarrow\downarrow$ generates a $\mathbb{Z}_2$ subgroup of the full spin-charge symmetry $U(1)\times SU(2)/\mathbb{Z}_2$. The quotient identifies the charge-$\pi$ rotation with the spin-$SU(2)$ center, since both act on the fermionic Fock space as fermion parity $e^{i\pi N}=e^{i2\pi S^a}=(-1)^N$. Thus the direct product would double-count the same parity operator. Up to a charge $U(1)$ phase, spin permutation is a $\pi$ spin rotation inside $SU(2)$,
+$$
+    \mathcal{P}_{ud} = e^{-i\pi N/2} e^{i\pi S^x}.
+$$
+On Majoranas,
+$$
+    \mathcal{P}_{ud}^{-1}\gamma^a_{i\uparrow}\mathcal{P}_{ud}=\gamma^a_{i\downarrow},
+    \qquad
+    \mathcal{P}_{ud}^{-1}\gamma^a_{i\downarrow}\mathcal{P}_{ud}=\gamma^a_{i\uparrow}.
+$$
+Unlike fermion parity, spin permutation is not diagonal on individual Majorana monomials. In general, one can form spin-permutation eigenoperators for any monomial $\Gamma$,
+$$
+    \Gamma_\pm = \Gamma\pm\mathcal{P}_{ud}^{-1}\Gamma\mathcal{P}_{ud}.
+$$
+In principle PSD matrices can then be decomposed into $+$ and $-$ blocks. This requires the active PSD basis to contain both $\Gamma$ and its spin-permuted partner $\mathcal{P}_{ud}^{-1}\Gamma\mathcal{P}_{ud}$. We have not implemented this basis-closure check and spin-permutation PSD blocking. Instead, spin permutation is most useful for variable canonicalization,
+$$
+    \langle\Gamma\rangle
+    =\left\langle\mathcal{P}_{ud}^{-1}\Gamma\mathcal{P}_{ud}\right\rangle,
+$$
+which reduces spin-permutation-related moment variables to a single representative.
+
+#### *6.6. Time reversion*
 todo
 
-#### *6.5. Particle-hole and $\eta$-pairing at half-filling*
+#### *6.7. Particle-hole and $\eta$-pairing at half-filling*
 todo
 
 ### *7. $J_1$-$J_2$ Heisenberg chain*
