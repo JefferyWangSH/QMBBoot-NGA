@@ -146,15 +146,15 @@ class HeisenbergCompiler:
             return self._sym_canon_cache[pstr.mask]
 
         orbit = []
-        for base in (pstr, pstr.invert()):
+        for inv_image in (pstr, pstr.invert()):
             for perm in itertools.permutations('XYZ'):
-                orbit.append(base.permute(perm))
+                orbit.append(inv_image.permute(perm))
 
-        # permutations commute with translation, and inversion maps T_s to T_-s,
+        # permutations commute with translation, and inversion maps T_s to T_{-s},
         # so taking trans_canon after each inversion/S3 image covers the full orbit.
-        key = min(rep.trans_canon for rep in orbit)
-        for rep in orbit:
-            self._sym_canon_cache[rep.mask] = key
+        key = min(image.trans_canon for image in orbit)
+        for image in orbit:
+            self._sym_canon_cache[image.mask] = key
         return key
 
     def _sym_allowed(self, pstr: PauliString) -> bool:

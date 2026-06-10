@@ -2,23 +2,38 @@ from functools import cached_property
 
 '''
     local Majorana-bilinear expansion of S^+_i and S^-_i
+
     entries are (mode1, mode2, coeff) for coeff * gamma_{i,mode1} gamma_{i,mode2},
     with mode = (u+, u-, d+, d-) = (0, 1, 2, 3) in Majorana normal order.
 '''
 _SPIN_LADDER_TERMS = {
     '+': (
-        (0, 2, .25),
-        (0, 3, .25j),
+        (0, 2, +.25),
+        (0, 3, +.25j),
         (1, 2, -.25j),
-        (1, 3, .25),
+        (1, 3, +.25),
     ),
     '-': (
         (0, 2, -.25),
-        (0, 3, .25j),
+        (0, 3, +.25j),
         (1, 2, -.25j),
         (1, 3, -.25),
     ),
 }
+
+'''
+    spin-resolved pi/2 Majorana-plane rotations
+
+        _MAJORANA_PLANE_C4_ROT[q][pm] = (new_pm, sign)
+
+    for r^q gamma_pm r^{-q} = sign * gamma_new_pm, with pm = 0,1 for (+,-).
+'''
+_MAJORANA_PLANE_C4_ROT = (
+    ((0, +1), (1, +1)),
+    ((1, +1), (0, -1)),
+    ((0, -1), (1, -1)),
+    ((1, -1), (0, +1)),
+)
 
 
 class MajoranaMonomial:
@@ -134,22 +149,68 @@ class MajoranaMonomial:
         return MajoranaMonomial(L=self.L, mask=mask), sign
 
     def invert(self):
-        # lattice inversion i <-> -i mod L
-        modes = []
+        '''
+            lattice inversion i <-> -i mod L
+        '''
+        mask = 0
+        swaps = 0
         support = self.mask
         while support:
             bit = support & -support
             mode = bit.bit_length() - 1
             site, rem = divmod(mode, 4)
-            modes.append(4*((-site) % self.L) + rem)
+            new_mode = 4*((-site) % self.L) + rem
+
+            swaps += (mask >> (new_mode + 1)).bit_count()
+            mask |= 1 << new_mode
             support ^= bit
 
-        swaps = 0
-        for i, mode_i in enumerate(modes):
-            for mode_j in modes[i+1:]:
-                swaps += int(mode_i > mode_j)
+        monomial = MajoranaMonomial(L=self.L, mask=mask)
+        return monomial, (-1 if swaps & 1 else 1)
 
-        mask = sum(1 << mode for mode in modes)
+    def c4_rotate(self, up_quarters: int = 0, dn_quarters: int = 0):
+        '''
+            spin-resolved pi/2 rotations in the Majorana planes
+        '''
+        quarters = (up_quarters % 4, dn_quarters % 4)
+        mask = 0
+        swaps = 0
+        total_sign = 1
+        support = self.mask
+        while support:
+            bit = support & -support
+            mode = bit.bit_length() - 1
+            site, rem = divmod(mode, 4)
+            spin, pm = divmod(rem, 2)
+            new_pm, local_sign = _MAJORANA_PLANE_C4_ROT[quarters[spin]][pm]
+            new_mode = 4*site + 2*spin + new_pm
+
+            swaps += (mask >> (new_mode + 1)).bit_count()
+            mask |= 1 << new_mode
+            total_sign *= local_sign
+            support ^= bit
+
+        monomial = MajoranaMonomial(L=self.L, mask=mask)
+        return monomial, total_sign * (-1 if swaps & 1 else 1)
+
+    def spin_exchange(self):
+        '''
+            exchange spin up and down
+        '''
+        mask = 0
+        swaps = 0
+        support = self.mask
+        while support:
+            bit = support & -support
+            mode = bit.bit_length() - 1
+            site, rem = divmod(mode, 4)
+            spin, pm = divmod(rem, 2)
+            new_mode = 4*site + 2*(1 - spin) + pm
+
+            swaps += (mask >> (new_mode + 1)).bit_count()
+            mask |= 1 << new_mode
+            support ^= bit
+
         monomial = MajoranaMonomial(L=self.L, mask=mask)
         return monomial, (-1 if swaps & 1 else 1)
 

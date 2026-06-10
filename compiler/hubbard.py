@@ -204,22 +204,40 @@ class HubbardCompiler:
             self._sym_canon_cache[monomial.mask] = None
             return None
 
-        inv_monomial, inv_sign = monomial.invert()
-        cands = (
-            (monomial.trans_canon, monomial.trans_canon_sign),
-            (inv_monomial.trans_canon, inv_sign * inv_monomial.trans_canon_sign),
-        )
-        canon = min(key for key, _ in cands)
-        signs = {sign for key, sign in cands if key == canon}
+        cands = []
+        for up_quarters, dn_quarters in itertools.product(range(4), repeat=2):
+            rotated, rot_sign = monomial.c4_rotate(up_quarters, dn_quarters)
+
+            for exchange in (False, True):
+                exchanged = rotated
+                exchange_sign = rot_sign
+                if exchange:
+                    exchanged, step_sign = rotated.spin_exchange()
+                    exchange_sign *= step_sign
+
+                for invert in (False, True):
+                    cand = exchanged
+                    cand_sign = exchange_sign
+                    if invert:
+                        cand, step_sign = exchanged.invert()
+                        cand_sign *= step_sign
+
+                    cands.append((
+                        cand.trans_canon,
+                        cand_sign * cand.trans_canon_sign,
+                    ))
+
+        canon_key = min(cand_key for cand_key, _ in cands)
+        signs = {cand_sign for cand_key, cand_sign in cands if cand_key == canon_key}
         if len(signs) > 1:
             self._sym_canon_cache[monomial.mask] = None
             return None
 
         canon_sign = signs.pop()
-        self._sym_canon_cache[monomial.mask] = (canon, canon_sign)
+        self._sym_canon_cache[monomial.mask] = (canon_key, canon_sign)
         if sign:
-            return canon, canon_sign
-        return canon
+            return canon_key, canon_sign
+        return canon_key
 
     def _sym_allowed(self, monomial: MajoranaMonomial) -> bool:
         '''

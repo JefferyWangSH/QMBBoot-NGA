@@ -178,8 +178,10 @@ class IsingCompiler:
         if pstr.mask in self._sym_canon_cache:
             return self._sym_canon_cache[pstr.mask]
 
-        key = min(pstr.trans_canon, pstr.invert().trans_canon)
-        self._sym_canon_cache[pstr.mask] = key
+        orbit = [pstr, pstr.invert()]
+        key = min(image.trans_canon for image in orbit)
+        for image in orbit:
+            self._sym_canon_cache[image.mask] = key
         return key
 
     def _sym_allowed(self, pstr: PauliString) -> bool:

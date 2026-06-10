@@ -16,16 +16,20 @@ Implemented:
 
 All three model compilers use:
 * lattice translation symmetry to generate momentum PSD blocks
-* lattice inversion
-* complex conjugation $\mathcal{K}$-symmetry
+* lattice inversion to prune SDP variables
+* complex conjugation $\mathcal{K}$-symmetry to prune $\mathcal{K}$-odd SDP variables and identify equivalent $k$ and $-k$ momentum PSD blocks
 
 Additional model-specific symmetries:
 * *$J_1$-$J_2$ Heisenberg chain*
-  * spin label permutation $S_3$
-  * spin rotation $SO(3)$; $\pi$-rotation subgroup $D_2=C_2\times C_2$ to further split PSD blocks
+  * spin label permutation $S_3$ to prune SDP variables
+  * spin rotation $SO(3)$ via Ward identities
+  * $\pi$-rotation spin subgroup $D_2=C_2\times C_2$ to further split PSD blocks
 * *Hubbard chain*
-  * charge symmetry $U_\uparrow(1)\times U_\downarrow(1)$; fixed filling number
-  * fermion parity $P_\uparrow\times P_\downarrow$ to further split PSD blocks
+  * spin-resolved fermion parity $P_\uparrow\times P_\downarrow$ to further split PSD blocks
+  * charge symmetry $U(1)$ via Ward identities; fixed total filling number
+  * spin rotation $SU(2)$ via Ward identities
+  * spin-resolved $\pi/2$ rotations $C_{4,\uparrow}\times C_{4,\downarrow}$ in the Majorana planes, i.e. a finite Abelian subgroup of $U_\uparrow(1)\times U_\downarrow(1)$, to prune SDP variables
+  * spin exchange to prune SDP variables
 
 ## TODOs
 - [ ] Bootstrap thermal states.
