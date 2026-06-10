@@ -103,8 +103,8 @@ class HeisenbergCompiler:
                 support &= ~(3 << (2 * site))
 
             (site1, code1), (site2, code2) = sites
-            self._hamil_terms_at_site[site1].append((site2, code1, h_mask, h_coeff))
-            self._hamil_terms_at_site[site2].append((site1, code2, h_mask, h_coeff))
+            self._hamil_terms_at_site[site1].append((site2, code1, h_mask, self.L * h_coeff))
+            self._hamil_terms_at_site[site2].append((site1, code2, h_mask, self.L * h_coeff))
 
         if obj_sense not in ('min', 'max'):
             raise ValueError('objective sense must be min or max')

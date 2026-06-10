@@ -318,8 +318,17 @@ class NGARunner:
             for desc_key, score in zip(desc_keys, block_scores):
                 cand_scores[desc_key] = cand_scores.get(desc_key, 0) + float(score)
 
-        self.record.grow_null_count = len(null_eigvals)
-        self.record.max_grow_null_eigval = float(np.max(null_eigvals)) if null_eigvals else None
+        null_count = len(null_eigvals)
+        if null_count == 0:
+            self.to_grow = []
+            self.record.grow_null_count = 0
+            self.record.max_grow_null_eigval = None
+            return self.to_grow
+
+        self.record.grow_null_count = null_count
+        self.record.max_grow_null_eigval = float(np.max(null_eigvals))
+        for key in cand_scores:
+            cand_scores[key] /= null_count
 
         if self.scheduler.reentry_penalty > 0:
             for key, count in self.drop_counts.items():

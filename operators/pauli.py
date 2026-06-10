@@ -1,5 +1,10 @@
 from functools import cached_property
 
+'''
+    local Pauli encoding used by the 2-bit mask representation
+    codes are I=0, X=1, Z=2, Y=3, so Pauli multiplication is mask XOR
+    times _PAULI_PHASE[_PAULI_MUL_PHASE_POWER[a][b]].
+'''
 _PAULI_CODE = {'X': 1, 'Y': 3, 'Z': 2}
 _PAULI_PHASE = (1., 1j, -1., -1j)
 _PAULI_MUL_PHASE_POWER = (

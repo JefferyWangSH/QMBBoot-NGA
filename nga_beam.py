@@ -297,6 +297,17 @@ class NGABeamRunner:
             for desc_key, score in zip(desc_keys, block_scores):
                 cand_scores[desc_key] = cand_scores.get(desc_key, 0) + float(score)
 
+        null_count = len(null_eigvals)
+        if null_count == 0:
+            eval_record.grow_null_count = 0
+            eval_record.max_grow_null_eigval = None
+            return []
+
+        eval_record.grow_null_count = null_count
+        eval_record.max_grow_null_eigval = float(np.max(null_eigvals))
+        for key in cand_scores:
+            cand_scores[key] /= null_count
+
         if self.scheduler.reentry_penalty > 0:
             for key, count in self.drop_counts.items():
                 if key in cand_scores:
@@ -304,9 +315,6 @@ class NGABeamRunner:
 
         scores = [(float(score), key, cand_reps[key]) for key, score in cand_scores.items()]
         scores.sort(key=lambda item: (-item[0], item[1]))
-
-        eval_record.grow_null_count = len(null_eigvals)
-        eval_record.max_grow_null_eigval = float(np.max(null_eigvals)) if null_eigvals else None
         return scores
 
     def _grow(self, grow_scores):

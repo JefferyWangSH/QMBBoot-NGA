@@ -4,7 +4,7 @@ import itertools
 import numpy as np
 import scipy as sp
 
-from operators.majorana import MajoranaMonomial, MajoranaOperator
+from operators.majorana import MajoranaMonomial, MajoranaOperator, _SPIN_LADDER_TERMS
 from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
 
 _CACHE_MAX_SIZE = 10_000_000
@@ -125,9 +125,15 @@ class HubbardCompiler:
         self.L = params.L
         self.params = params
         self.n_particles = params.n_particles
-        self.ward_ops = {'hamil': 0, 'Nu': 0, 'Nd': 0}
+        self.ward_ops = {'hamil': 0, 'Nu': 0, 'Nd': 0, 'S+': 0}
 
         self.hamil_op = build_hamil(params)
+
+        # site index for local Hamiltonian terms
+        # each entry stores (h_mask, h_coeff, lower_masks):
+        # 1) h_mask is the Majorana mask of a local H term touching this site;
+        # 2) h_coeff is scaled from energy density to total H;
+        # 3) and lower_masks cache swap signs.
         self._hamil_terms_at_site = [[] for _ in range(self.L)]
         for h_mono, h_coeff in self.hamil_op.terms.items():
             h_mask = h_mono.mask
@@ -144,7 +150,7 @@ class HubbardCompiler:
                 bit = support & -support
                 site = (bit.bit_length() - 1) // 4
                 support &= ~(0xf << (4*site))
-                self._hamil_terms_at_site[site].append((h_mask, h_coeff, tuple(lower_masks)))
+                self._hamil_terms_at_site[site].append((h_mask, self.L * h_coeff, tuple(lower_masks)))
 
         self.number_up_op = build_number(params, spin='u')
         self.number_dn_op = build_number(params, spin='d')
@@ -325,6 +331,9 @@ class HubbardCompiler:
             self.psd_blocks.append(psd)
 
     def _hamil_comm(self, monomial: MajoranaMonomial) -> MajoranaOperator:
+        r'''
+            return [\sum_i H_i, O] as a Majorana operator
+        '''
         op = MajoranaOperator()
         seen = set()
         support = monomial.mask
@@ -390,8 +399,8 @@ class HubbardCompiler:
                     self.ward_ops['hamil'] += 1
 
     def _number_comm(self, monomial: MajoranaMonomial, spin: str) -> MajoranaOperator:
-        '''
-            return [N_s, O] as a Majorana operator
+        r'''
+            return [\sum_i N_{i,s}, O] as a Majorana operator
             spin: 'u' or 'd'
         '''
         assert spin in ('u', 'd')
@@ -415,7 +424,7 @@ class HubbardCompiler:
 
             prod = MajoranaMonomial(self.L, monomial.mask ^ number_mask)
             sign = -1 if overlap == lo_bit else 1
-            op.add(prod, 1j * sign / self.L)
+            op.add(prod, 1j * sign)
         return op
 
     def _add_number_wards(self, spin: str):
@@ -466,6 +475,84 @@ class HubbardCompiler:
                 self.affines.add(expr)
                 self.ward_ops[f'N{spin}'] += 1
 
+    def _spin_comm(self, monomial: MajoranaMonomial, spin: str) -> MajoranaOperator:
+        r'''
+            return [\sum_i S_{i,s}, O] as a Majorana operator
+            spin: '+' or '-'
+        '''
+        assert spin in ('+', '-')
+        op = MajoranaOperator()
+        support = monomial.mask
+        while support:
+            bit = support & -support
+            site = (bit.bit_length() - 1) // 4
+            support &= ~(0xf << (4*site))
+
+            for rem1, rem2, coeff in _SPIN_LADDER_TERMS[spin]:
+                mode1 = 4*site + rem1
+                mode2 = 4*site + rem2
+                spin_mask = (1 << mode1) | (1 << mode2)
+                if (monomial.mask & spin_mask).bit_count() != 1:
+                    continue
+
+                sign = -1 if (
+                    (monomial.mask & ((1 << mode1) - 1)).bit_count()
+                    + (monomial.mask & ((1 << mode2) - 1)).bit_count()
+                ) & 1 else 1
+                prod = MajoranaMonomial(self.L, monomial.mask ^ spin_mask)
+                op.add(prod, 2 * coeff * sign)
+        return op
+
+    def _add_spin_wards(self, spin: str):
+        r'''
+            add representable SU(2) Ward identities <[S_\pm, O]> == 0
+            within the current SDP variable set
+
+                1) <[S_z, O]> == 0 have been covered by <[N_s, O]> == 0.
+
+                2) since S_\pm carries spin-resolved parity (1, 1), candidate O has
+                   spin-resolved parity (1, 1) so that [S_\pm, O] can land in the even
+                   variable sector (0, 0).
+
+                3) its K parity is not fixed because S_\pm mixes local K parities.
+        '''
+        assert spin in ('+', '-')
+        seen_masks = set()
+        seen_keys = set()
+
+        for var in self.vars:
+            support = var.mask
+            while support:
+                bit = support & -support
+                site = (bit.bit_length() - 1) // 4
+                support &= ~(0xf << (4*site))
+
+                for rem1, rem2, _ in _SPIN_LADDER_TERMS[spin]:
+                    spin_mask = (1 << (4*site + rem1)) | (1 << (4*site + rem2))
+                    if (var.mask & spin_mask).bit_count() != 1:
+                        continue
+                    mask = var.mask ^ spin_mask
+                    if mask in seen_masks:
+                        continue
+                    seen_masks.add(mask)
+
+                    cand = MajoranaMonomial(self.L, mask)
+                    # trans_canon is cheaper than _sym_canon
+                    # although it may produce redundant Ward identities
+                    key = self.trans_canon(cand)
+                    # key = self._sym_canon(cand)
+                    # if key is None:
+                    #     continue
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+
+                    expr = self._compile_expr(self._spin_comm(cand, spin))
+                    if expr is None or not expr.terms:
+                        continue
+                    self.affines.add(expr)
+                    self.ward_ops[f'S{spin}'] += 1
+
     def _build_affines(self):
         self.affines = AffineConstraints(n_vars=len(self.vars))
         for key in self.ward_ops:
@@ -476,7 +563,7 @@ class HubbardCompiler:
             raise ValueError('current basis cannot represent the identity operator')
         self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
 
-        # fix particle number
+        # fix total particle number
         if self.n_particles is not None:
             number_shift = self.number_op.copy()
             number_shift.add(MajoranaMonomial.identity(self.L), -float(self.n_particles) / self.L)
@@ -495,6 +582,17 @@ class HubbardCompiler:
         self._add_hamil_wards()
         self._add_number_wards('u')
         self._add_number_wards('d')
+
+        # S^- Ward identities are redundant with S^+:
+        # they use the same Majorana bilinear masks and hence generate identical candidates O.
+        # because (S^+)^dag = S^-, we have
+        #
+        #   [S^+, O] = -eta_O [S^-, O]^dag
+        #
+        # for O^dag = eta_O O. After compiling to hermitianized real variables,
+        # each S^- Ward identity maps one-to-one to the corresponding S^+ Ward identity.
+        self._add_spin_wards('+')
+        # self._add_spin_wards('-')
 
         self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-12)
 

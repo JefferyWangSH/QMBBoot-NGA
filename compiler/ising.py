@@ -89,11 +89,6 @@ class IsingCompiler:
     affines_mat: sp.sparse.csr_matrix
 
     hamil_op: PauliOperator
-    # Hamiltonian terms bucketed by every site in their support
-    # for each site, it involves a list of
-    # h_sites: tuple of (site, Pauli code)
-    # h_mask: Hamiltonian Pauli mask
-    # h_coeff: Hamiltonian coefficient
     _hamil_terms_at_site: list[list[tuple[tuple[tuple[int, int], ...], int, float | complex]]]
 
     # SDP objective
@@ -122,6 +117,12 @@ class IsingCompiler:
         self.ward_ops = {'hamil': 0}
 
         self.hamil_op = build_hamil(params)
+
+        # Hamiltonian terms bucketed by every site in their support
+        # for each site, it involves a list of
+        # 1) h_sites: tuple of (site, Pauli code)
+        # 2) h_mask: Hamiltonian Pauli mask
+        # 3) h_coeff: Hamiltonian coefficient
         self._hamil_terms_at_site = [[] for _ in range(self.L)]
         for hstr, h_coeff in self.hamil_op.terms.items():
             h_mask = hstr.mask
@@ -136,7 +137,7 @@ class IsingCompiler:
 
             h_sites = tuple(h_sites)
             for site, _ in h_sites:
-                self._hamil_terms_at_site[site].append((h_sites, h_mask, h_coeff))
+                self._hamil_terms_at_site[site].append((h_sites, h_mask, self.L * h_coeff))
 
         if obj_sense not in ('min', 'max'):
             raise ValueError('objective sense must be min or max')

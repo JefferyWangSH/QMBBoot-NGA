@@ -1,5 +1,26 @@
 from functools import cached_property
 
+'''
+    local Majorana-bilinear expansion of S^+_i and S^-_i
+    entries are (mode1, mode2, coeff) for coeff * gamma_{i,mode1} gamma_{i,mode2},
+    with mode = (u+, u-, d+, d-) = (0, 1, 2, 3) in Majorana normal order.
+'''
+_SPIN_LADDER_TERMS = {
+    '+': (
+        (0, 2, .25),
+        (0, 3, .25j),
+        (1, 2, -.25j),
+        (1, 3, .25),
+    ),
+    '-': (
+        (0, 2, -.25),
+        (0, 3, .25j),
+        (1, 2, -.25j),
+        (1, 3, -.25),
+    ),
+}
+
+
 class MajoranaMonomial:
     '''
         spinful Majorana monomial on a length-L PBC chain (normal ordered).
