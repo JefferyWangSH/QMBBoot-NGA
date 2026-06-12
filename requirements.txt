@@ -1,3 +1,4 @@
+# Python >= 3.13
 numpy
 scipy
 cvxpy
@@ -5,3 +6,5 @@ matplotlib
 ipympl
 scikit-sparse>=0.5.0
 lru-dict
+cppimport
+pybind11

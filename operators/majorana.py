@@ -326,6 +326,19 @@ class MajoranaMonomial:
         return ' '.join(parts)
 
 
+import os
+
+if os.environ.get('USE_JIT', '1') != '0':
+    try:
+        from .majorana_jit import MajoranaMonomial
+    except ImportError as exc:
+        import warnings
+        warnings.warn(
+            f'failed to import JIT C++ MajoranaMonomial; falling back to Python implementation: {exc}',
+            RuntimeWarning,
+        )
+
+
 class MajoranaOperator:
     L: int | None
     terms: dict[MajoranaMonomial, float|complex]

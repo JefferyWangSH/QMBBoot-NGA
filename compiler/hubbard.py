@@ -1,11 +1,21 @@
 from dataclasses import dataclass
 from lru import LRU
 import itertools
+import os
 import numpy as np
 import scipy as sp
 
 from operators.majorana import MajoranaMonomial, MajoranaOperator, _SPIN_LADDER_TERMS
 from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
+
+_USE_JIT = os.environ.get('USE_JIT', '1') != '0'
+if _USE_JIT:
+    try:
+        from compiler.hubbard_jit import sym_canon as _cpp_sym_canon
+    except ImportError:
+        _cpp_sym_canon = None
+else:
+    _cpp_sym_canon = None
 
 _CACHE_MAX_SIZE = 10_000_000
 
@@ -194,6 +204,15 @@ class HubbardCompiler:
             self._sym_canon_cache = LRU(_CACHE_MAX_SIZE)
         if monomial.mask in self._sym_canon_cache:
             canon = self._sym_canon_cache[monomial.mask]
+            if canon is None:
+                return None
+            if sign:
+                return canon
+            return canon[0]
+
+        if _cpp_sym_canon is not None:
+            canon = _cpp_sym_canon(monomial, sign=True)
+            self._sym_canon_cache[monomial.mask] = canon
             if canon is None:
                 return None
             if sign:

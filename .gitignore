@@ -1,4 +1,8 @@
 **/__pycache__
+**/build
+**/.cache
+*.egg-info
+*.so
 .claude
 CLAUDE.md
 AGENTS.md

@@ -31,6 +31,11 @@ Additional model-specific symmetries:
   * spin-resolved $\pi/2$ rotations $C_{4,\uparrow}\times C_{4,\downarrow}$ in the Majorana planes, i.e. a finite Abelian subgroup of $U_\uparrow(1)\times U_\downarrow(1)$, to prune SDP variables
   * spin exchange to prune SDP variables
 
+## Dependencies
+* Python >= 3.13
+* NumPy, SciPy, CVXPY, scikit-sparse, lru-dict
+* (optional) cppimport, pybind11, and a C++20 compiler for JIT
+
 ## TODOs
 - [ ] Bootstrap thermal states.
 

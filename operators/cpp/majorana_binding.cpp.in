@@ -1,0 +1,134 @@
+/*
+<%
+setup_pybind11(cfg)
+cfg['compiler_args'] = ['-std=c++20', '-O3']
+cfg['include_dirs'] = ['@REPO_ROOT@']
+%>
+*/
+
+#include "operators/cpp/majorana.hpp"
+#include "operators/cpp/majorana_mask.hpp"
+
+#include <pybind11/complex.h>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include <cstddef>
+#include <stdexcept>
+#include <string>
+#include <utility>
+
+namespace py = pybind11;
+using MajoranaMonomial = qmbboot::operators::MajoranaMonomial<@L@>;
+using qmbboot::operators::majorana::mask_to_words;
+using qmbboot::operators::majorana::words_to_mask;
+
+namespace {
+
+void check_L(std::size_t L) {
+    if (L != MajoranaMonomial::L) {
+        throw std::invalid_argument("MajoranaMonomial module was compiled for a different L");
+    }
+}
+
+MajoranaMonomial from_mask(std::size_t L, const py::int_& mask) {
+    check_L(L);
+    return MajoranaMonomial(mask_to_words<@L@>(mask));
+}
+
+py::object from_str(std::size_t L, const std::string& s, bool sign) {
+    check_L(L);
+    auto [monomial, total_sign] = MajoranaMonomial::from_string(s);
+    if (sign) {
+        return py::make_tuple(std::move(monomial), total_sign);
+    }
+    return py::cast(std::move(monomial));
+}
+
+MajoranaMonomial identity(std::size_t L) {
+    check_L(L);
+    return MajoranaMonomial::identity();
+}
+
+py::int_ mask(const MajoranaMonomial& monomial) {
+    return words_to_mask(monomial.words());
+}
+
+py::object fermion_parity(const MajoranaMonomial& monomial, bool spin) {
+    const auto parity = monomial.fermion_parity();
+    if (spin) {
+        return py::make_tuple(parity.first, parity.second);
+    }
+    return py::cast((parity.first + parity.second) & 1);
+}
+
+py::int_ trans_canon(const MajoranaMonomial& monomial) {
+    return words_to_mask(monomial.trans_canon().first.words());
+}
+
+int trans_canon_sign(const MajoranaMonomial& monomial) {
+    return monomial.trans_canon().second;
+}
+
+MajoranaMonomial trans_canon_rep(const MajoranaMonomial& monomial) {
+    return monomial.trans_canon().first;
+}
+
+std::size_t period(const MajoranaMonomial& monomial) {
+    return monomial.period().first;
+}
+
+int period_sign(const MajoranaMonomial& monomial) {
+    return monomial.period().second;
+}
+
+std::string repr(const MajoranaMonomial& monomial) {
+    return "MajoranaMonomial(L=@L@, mask=" + py::str(mask(monomial)).cast<std::string>() + ")";
+}
+
+py::ssize_t hash(const MajoranaMonomial& monomial) {
+    return py::hash(py::make_tuple(MajoranaMonomial::L, mask(monomial)));
+}
+
+}  // namespace
+
+PYBIND11_MODULE(@MODULE_NAME@, m) {
+    m.doc() = "JIT C++ Majorana monomial class";
+
+    py::class_<MajoranaMonomial>(m, "MajoranaMonomial")
+        // construction
+        .def(py::init(&from_mask), py::arg("L"), py::arg("mask") = py::int_(0))
+        .def_static("from_str", &from_str, py::arg("L"), py::arg("s"), py::arg("sign") = false)
+        .def_static("identity", &identity, py::arg("L"))
+
+        // data
+        .def_property_readonly("L", [](const MajoranaMonomial&) { return MajoranaMonomial::L; })
+        .def_property_readonly("mask", &mask)
+
+        // physical properties
+        .def("degree", &MajoranaMonomial::degree)
+        .def("dag_phase", &MajoranaMonomial::dag_phase)
+        .def("hermitian_phase", &MajoranaMonomial::hermitian_phase)
+        .def("fermion_parity", &fermion_parity, py::arg("spin") = false)
+        .def("k_parity", &MajoranaMonomial::k_parity, py::arg("hermitian") = true)
+
+        // physical/symmetry operations
+        .def("mul", &MajoranaMonomial::mul)
+        .def("translate", &MajoranaMonomial::translate)
+        .def_property_readonly("trans_canon", &trans_canon)
+        .def_property_readonly("trans_canon_sign", &trans_canon_sign)
+        .def_property_readonly("trans_canon_rep", &trans_canon_rep)
+        .def_property_readonly("period", &period)
+        .def_property_readonly("period_sign", &period_sign)
+        .def("invert", &MajoranaMonomial::invert)
+        .def("c4_rotate", &MajoranaMonomial::c4_rotate, py::arg("up_quarters") = 0, py::arg("dn_quarters") = 0)
+        .def("spin_exchange", &MajoranaMonomial::spin_exchange)
+
+        // Python protocol
+        .def("__str__", &MajoranaMonomial::to_string)
+        .def("__repr__", &repr)
+        .def("__hash__", &hash)
+        .def("__eq__", [](const MajoranaMonomial& a, const MajoranaMonomial& b) {
+            return a == b;
+        });
+}
