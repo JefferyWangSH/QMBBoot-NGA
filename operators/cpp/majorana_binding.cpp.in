@@ -7,7 +7,7 @@ cfg['include_dirs'] = ['@REPO_ROOT@']
 */
 
 #include "operators/cpp/majorana.hpp"
-#include "operators/cpp/majorana_mask.hpp"
+#include "operators/cpp/py_mask.hpp"
 
 #include <pybind11/complex.h>
 #include <pybind11/pybind11.h>
@@ -20,8 +20,8 @@ cfg['include_dirs'] = ['@REPO_ROOT@']
 
 namespace py = pybind11;
 using MajoranaMonomial = qmbboot::operators::MajoranaMonomial<@L@>;
-using qmbboot::operators::majorana::mask_to_words;
-using qmbboot::operators::majorana::words_to_mask;
+using qmbboot::operators::py_mask::mask_to_words;
+using qmbboot::operators::py_mask::words_to_mask;
 
 namespace {
 
@@ -33,7 +33,7 @@ void check_L(std::size_t L) {
 
 MajoranaMonomial from_mask(std::size_t L, const py::int_& mask) {
     check_L(L);
-    return MajoranaMonomial(mask_to_words<@L@>(mask));
+    return MajoranaMonomial(mask_to_words<MajoranaMonomial::n_words, MajoranaMonomial::n_modes>(mask));
 }
 
 py::object from_str(std::size_t L, const std::string& s, bool sign) {

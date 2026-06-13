@@ -11,7 +11,7 @@ from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
 _USE_JIT = os.environ.get('USE_JIT', '1') != '0'
 if _USE_JIT:
     try:
-        from compiler.hubbard_jit import sym_canon as _cpp_sym_canon
+        from compiler.kernels.hubbard import sym_canon as _cpp_sym_canon
     except ImportError:
         _cpp_sym_canon = None
 else:

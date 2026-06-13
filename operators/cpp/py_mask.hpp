@@ -1,29 +1,26 @@
 #pragma once
 
-#include "operators/cpp/majorana.hpp"
-
 #include <pybind11/pybind11.h>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
-#include <vector>
 
-namespace qmbboot::operators::majorana {
+namespace qmbboot::operators::py_mask {
 
 namespace py = pybind11;
 
-template <std::size_t L>
-inline std::array<std::uint64_t, MajoranaMonomial<L>::n_words> mask_to_words(const py::int_& mask) {
+template <std::size_t n_words, std::size_t n_bits>
+inline std::array<std::uint64_t, n_words> mask_to_words(const py::int_& mask) {
     if (PyObject_RichCompareBool(mask.ptr(), py::int_(0).ptr(), Py_LT) == 1) {
         throw std::invalid_argument("mask must be non-negative");
     }
-    if (mask.attr("bit_length")().cast<std::size_t>() > MajoranaMonomial<L>::n_modes) {
-        throw std::invalid_argument("mask exceeds the available 4L Majorana modes");
+    if (mask.attr("bit_length")().cast<std::size_t>() > n_bits) {
+        throw std::invalid_argument("mask exceeds the available bits");
     }
 
-    std::array<std::uint64_t, MajoranaMonomial<L>::n_words> words{};
+    std::array<std::uint64_t, n_words> words{};
     const auto n_bytes = static_cast<Py_ssize_t>(words.size() * sizeof(std::uint64_t));
     const int flags = Py_ASNATIVEBYTES_LITTLE_ENDIAN
         | Py_ASNATIVEBYTES_UNSIGNED_BUFFER
@@ -34,13 +31,13 @@ inline std::array<std::uint64_t, MajoranaMonomial<L>::n_words> mask_to_words(con
         throw py::error_already_set();
     }
     if (required > n_bytes) {
-        throw std::invalid_argument("mask exceeds the available 4L Majorana modes");
+        throw std::invalid_argument("mask exceeds the available bits");
     }
     return words;
 }
 
-template <std::size_t N>
-inline py::int_ words_to_mask(const std::array<std::uint64_t, N>& words) {
+template <std::size_t n_words>
+inline py::int_ words_to_mask(const std::array<std::uint64_t, n_words>& words) {
     auto mask = PyLong_FromUnsignedNativeBytes(
         words.data(),
         words.size() * sizeof(std::uint64_t),
@@ -52,4 +49,4 @@ inline py::int_ words_to_mask(const std::array<std::uint64_t, N>& words) {
     return py::reinterpret_steal<py::int_>(mask);
 }
 
-}  // namespace qmbboot::operators::majorana
+}  // namespace qmbboot::operators::py_mask

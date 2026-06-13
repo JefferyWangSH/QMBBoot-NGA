@@ -210,4 +210,4 @@ if __name__ == '__main__':
     assert_raises(ValueError, lambda: CppMajoranaMonomial.from_str(4, '0u?'))
     assert_raises(TypeError, lambda: CppMajoranaMonomial(4, 1).mul(CppMajoranaMonomial(5, 1)))
 
-    print('Majorana USE_JIT=0/1 equivalence test passed')
+    print('MajoranaMonomial JIT equivalence test passed')

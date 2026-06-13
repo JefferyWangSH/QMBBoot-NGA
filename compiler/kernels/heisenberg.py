@@ -5,18 +5,21 @@ from pathlib import Path
 
 import cppimport
 
-__all__ = ['MajoranaMonomial']
+from operators.pauli_jit import PauliString
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-_TEMPLATE_PATH = _REPO_ROOT / 'operators' / 'cpp' / 'majorana_binding.cpp.in'
-_CACHE_ROOT = _REPO_ROOT / '.cache' / 'operators' / 'majorana'
+__all__ = ['sym_canon']
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_TEMPLATE_PATH = _REPO_ROOT / 'compiler' / 'cpp' / 'heisenberg_kernel_binding.cpp.in'
+_CACHE_ROOT = _REPO_ROOT / '.cache' / 'compiler' / 'kernels' / 'heisenberg'
 
 
 def _source_hash() -> str:
     h = hashlib.sha256()
     for path in (
         _TEMPLATE_PATH,
-        _REPO_ROOT / 'operators' / 'cpp' / 'majorana.hpp',
+        _REPO_ROOT / 'compiler' / 'cpp' / 'heisenberg_kernel.hpp',
+        _REPO_ROOT / 'operators' / 'cpp' / 'pauli.hpp',
         _REPO_ROOT / 'operators' / 'cpp' / 'py_mask.hpp',
     ):
         h.update(path.read_bytes())
@@ -24,7 +27,7 @@ def _source_hash() -> str:
 
 
 def _module_name(L: int) -> str:
-    return f'_majorana_L{L}_{_source_hash()}'
+    return f'_heisenberg_kernel_L{L}_{_source_hash()}'
 
 
 def _source_path(module_name: str) -> Path:
@@ -45,6 +48,9 @@ def _load_module(L: int):
     if L <= 0:
         raise ValueError('L must be positive')
 
+    # register the PauliString<L> pybind type first
+    PauliString.identity(L)
+
     module_name = _module_name(L)
     source_path = _source_path(module_name)
     _CACHE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -57,17 +63,6 @@ def _load_module(L: int):
     return cppimport.imp_from_filepath(str(source_path), fullname=module_name)
 
 
-class MajoranaMonomial:
-    def __new__(cls, L: int, mask: int = 0):
-        mod = _load_module(L)
-        return mod.MajoranaMonomial(L, mask)
-
-    @staticmethod
-    def from_str(L: int, s: str, sign: bool = False):
-        mod = _load_module(L)
-        return mod.MajoranaMonomial.from_str(L, s, sign=sign)
-
-    @staticmethod
-    def identity(L: int):
-        mod = _load_module(L)
-        return mod.MajoranaMonomial.identity(L)
+def sym_canon(pstr):
+    mod = _load_module(pstr.L)
+    return mod.sym_canon(pstr)

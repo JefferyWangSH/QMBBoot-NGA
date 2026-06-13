@@ -1,11 +1,21 @@
 from dataclasses import dataclass
 from lru import LRU
 import itertools
+import os
 import numpy as np
 import scipy as sp
 
 from operators.pauli import PauliString, PauliOperator, _PAULI_CODE, _PAULI_PHASE, _PAULI_MUL_PHASE_POWER
 from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
+
+_USE_JIT = os.environ.get('USE_JIT', '1') != '0'
+if _USE_JIT:
+    try:
+        from compiler.kernels.heisenberg import sym_canon as _cpp_sym_canon
+    except ImportError:
+        _cpp_sym_canon = None
+else:
+    _cpp_sym_canon = None
 
 _CACHE_MAX_SIZE = 10_000_000
 
@@ -144,6 +154,11 @@ class HeisenbergCompiler:
             self._sym_canon_cache = LRU(_CACHE_MAX_SIZE)
         if pstr.mask in self._sym_canon_cache:
             return self._sym_canon_cache[pstr.mask]
+
+        if _cpp_sym_canon is not None:
+            key = _cpp_sym_canon(pstr)
+            self._sym_canon_cache[pstr.mask] = key
+            return key
 
         orbit = []
         for inv_image in (pstr, pstr.invert()):

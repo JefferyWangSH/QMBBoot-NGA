@@ -171,6 +171,19 @@ class PauliString:
         return ((nx + ny) & 1, (ny + nz) & 1)
 
 
+import os
+
+if os.environ.get('USE_JIT', '1') != '0':
+    try:
+        from .pauli_jit import PauliString
+    except ImportError as exc:
+        import warnings
+        warnings.warn(
+            f'failed to import JIT C++ PauliString; falling back to Python implementation: {exc}',
+            RuntimeWarning,
+        )
+
+
 class PauliOperator:
     L: int | None
     terms: dict[PauliString, float|complex]
