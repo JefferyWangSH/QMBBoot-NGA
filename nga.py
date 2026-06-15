@@ -82,8 +82,9 @@ class NGARunner:
             Compiler.compile(basis_reprs: list[BasisRep]) -> None
             Compiler.sdp_data() -> SDPData
             Compiler.summary() -> dict
-            Compiler.descendants(rep: BasisRep) -> list[tuple[BasisRep, int, complex]]
-            Compiler.nonzero_fourier(rep: BasisRep, block_idx: int) -> bool
+            Compiler.descendants(rep: BasisRep) -> list[tuple[BasisRep, Shift, complex]]
+            Compiler.fourier_phase(q: MomentumIndex, shift: Shift) -> complex
+            Compiler.nonzero_fourier(rep: BasisRep, q: MomentumIndex) -> bool
     '''
     def __init__(
         self,
@@ -249,7 +250,7 @@ class NGARunner:
         cand_reps = {}
         null_eigvals = []
 
-        for n, block_reprs, eigvals, eigvecs in zip(
+        for q, block_reprs, eigvals, eigvecs in zip(
             self.compiler.block_momenta,
             self.compiler.block_reprs,
             self.psd_eigvals,
@@ -261,7 +262,6 @@ class NGARunner:
 
             null_eigvals.extend(eigvals[null_mask])
             null_eigvecs = eigvecs[:, null_mask]
-            k = 2 * np.pi * n / self.compiler.L
 
             r'''
                 W_{b,\alpha}(k) = \sum_{s,a} [v_{k,\alpha}]_a C_{ab}(s) e^{iks}
@@ -290,7 +290,7 @@ class NGARunner:
                     desc_key = self._canon(desc_rep)
                     if desc_key in basis_keys:
                         continue
-                    if not self.compiler.nonzero_fourier(desc_rep, n):
+                    if not self.compiler.nonzero_fourier(desc_rep, q):
                         continue
 
                     row = desc_rows.get(desc_key)
@@ -303,7 +303,7 @@ class NGARunner:
 
                     rows.append(row)
                     cols.append(a_idx)
-                    data.append(coeff * np.exp(1j * k * s))
+                    data.append(coeff * self.compiler.fourier_phase(q, s))
 
             if not data:
                 continue

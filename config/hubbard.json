@@ -34,8 +34,7 @@
   "nga": {
     "solver_backend": "SCS",
     "solver_kwargs": {
-      "eps": 1e-5,
-      "max_iters": 10000
+      "eps": 1e-5
     },
     "drop_null_tol": 1e-5,
     "grow_null_tol": 1e-5,

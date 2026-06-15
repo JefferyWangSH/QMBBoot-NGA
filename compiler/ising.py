@@ -223,9 +223,13 @@ class IsingCompiler:
                             self.var_index[key] = len(self.vars)
                             self.vars.append(PauliString(L=self.L, mask=key))
 
+    def fourier_phase(self, q: int, r: int) -> complex:
+        # q is the integer momentum-sector index
+        return np.exp(1j * 2 * np.pi * q * r / self.L)
+
     @staticmethod
-    def nonzero_fourier(pstr: PauliString, n: int) -> bool:
-        return (n * pstr.period) % pstr.L == 0
+    def nonzero_fourier(pstr: PauliString, q: int) -> bool:
+        return (q * pstr.period) % pstr.L == 0
 
     def _build_block_reprs(self):
         '''
@@ -234,12 +238,12 @@ class IsingCompiler:
         '''
         self.block_reprs = []
         self.block_momenta = []
-        for n in range(self.L//2 + 1):
+        for q in range(self.L//2 + 1):
             self.block_reprs.append([
                 pstr for pstr in self.basis_reprs
-                if self.nonzero_fourier(pstr, n)
+                if self.nonzero_fourier(pstr, q)
             ])
-            self.block_momenta.append(n)
+            self.block_momenta.append(q)
 
     def _build_psd(self):
         '''
@@ -251,8 +255,7 @@ class IsingCompiler:
             K symmetry imposes that M(-k) = diag(eta) M(k)^\ast diag(eta)
             therefore the number of independent momentum PSD blocks can be reduced by half
         '''
-        for n, block_basis in zip(self.block_momenta, self.block_reprs):
-            k = 2*np.pi * n / self.L
+        for q, block_basis in zip(self.block_momenta, self.block_reprs):
             psd = PSDConstraints(n_vars=len(self.vars), dim=len(block_basis))
 
             for row, pstr1 in enumerate(block_basis):
@@ -265,7 +268,7 @@ class IsingCompiler:
                             continue
 
                         idx = self.var_index[self._sym_canon(pstr)]
-                        coeff = np.exp(1j * k * r) * phase / self.L
+                        coeff = self.fourier_phase(q, r) * phase / self.L
                         expr[idx] = expr.get(idx, 0) + coeff
                         if abs(expr[idx]) < 1e-14:
                             del expr[idx]

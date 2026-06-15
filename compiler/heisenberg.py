@@ -198,31 +198,34 @@ class HeisenbergCompiler:
                             self.var_index[key] = len(self.vars)
                             self.vars.append(PauliString(self.L, key))
 
+    def fourier_phase(self, q: int, r: int) -> complex:
+        # q is the integer momentum-sector index
+        return np.exp(1j * 2 * np.pi * q * r / self.L)
+
     @staticmethod
-    def nonzero_fourier(pstr: PauliString, n: int) -> bool:
-        return (n * pstr.period) % pstr.L == 0
+    def nonzero_fourier(pstr: PauliString, q: int) -> bool:
+        return (q * pstr.period) % pstr.L == 0
 
     def _build_block_reprs(self):
         self.block_reprs = []
         self.block_momenta = []
 
-        for n in range(self.L//2 + 1): # K symmetry
+        for q in range(self.L//2 + 1): # K symmetry
             charge_reprs = {}
             for pstr in self.basis_reprs:
-                if not self.nonzero_fourier(pstr, n):
+                if not self.nonzero_fourier(pstr, q):
                     continue
                 charge = pstr.pi_rot_charge()
                 charge_reprs.setdefault(charge, []).append(pstr)
 
             for charge in sorted(charge_reprs):
                 self.block_reprs.append(charge_reprs[charge])
-                self.block_momenta.append(n)
+                self.block_momenta.append(q)
 
     def _build_psd(self):
         self.psd_blocks = []
 
-        for n, block_basis in zip(self.block_momenta, self.block_reprs):
-            k = 2*np.pi * n / self.L
+        for q, block_basis in zip(self.block_momenta, self.block_reprs):
             psd = PSDConstraints(n_vars=len(self.vars), dim=len(block_basis))
 
             for row, pstr1 in enumerate(block_basis):
@@ -235,7 +238,7 @@ class HeisenbergCompiler:
                             continue
 
                         idx = self.var_index[self._sym_canon(pstr)]
-                        coeff = np.exp(1j * k * r) * phase / self.L
+                        coeff = self.fourier_phase(q, r) * phase / self.L
                         expr[idx] = expr.get(idx, 0) + coeff
                         if abs(expr[idx]) < 1e-14:
                             del expr[idx]

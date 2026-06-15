@@ -81,9 +81,43 @@ class BeamModelAdapter:
                 model_params,
                 **cls.build_compiler_kwargs(data, build_obj, build_obs),
             )
-            parse_basis = lambda strings: [MajoranaMonomial.from_str(model_params.L, s).trans_canon_rep for s in strings]
-            initial_basis = lambda initial: parse_basis(initial) if isinstance(initial, list) else build_basis_reprs(model_params.L, **initial)
-            required_basis = parse_basis(basis_config['required'])
+            build_basis = lambda strings: [MajoranaMonomial.from_str(model_params.L, s).trans_canon_rep for s in strings]
+            build_initial_basis = lambda initial: build_basis(initial) if isinstance(initial, list) else build_basis_reprs(model_params.L, **initial)
+            required_basis = build_basis(basis_config['required'])
+
+        elif model_type == 'hubbard_square':
+            from compiler.hubbard_square import HubbardSquareCompiler, HubbardSquareParams, build_hamil, build_szz
+            from operators.majorana_square import MajoranaMonomialSquare
+            model_params = HubbardSquareParams(**model_config)
+
+            def build_obj(name):
+                if name == 'hamil':
+                    return build_hamil(model_params)
+                if name == 'szz':
+                    return build_szz(model_params, 1, 0)
+                raise ValueError(f'unknown Hubbard square objective: {name}')
+
+            def build_obs(name):
+                if name == 'hamil':
+                    return build_hamil(model_params)
+                if name == 'szz':
+                    return [
+                        build_szz(model_params, dx, dy)
+                        for dx in range(model_params.Lx)
+                        for dy in range(model_params.Ly)
+                    ]
+                raise ValueError(f'unknown Hubbard square observable: {name}')
+
+            compiler = HubbardSquareCompiler(
+                model_params,
+                **cls.build_compiler_kwargs(data, build_obj, build_obs),
+            )
+            build_basis = lambda strings: [
+                MajoranaMonomialSquare.from_str(model_params.Lx, model_params.Ly, s).trans_canon_rep
+                for s in strings
+            ]
+            build_initial_basis = build_basis
+            required_basis = build_basis(basis_config['required'])
 
         elif model_type == 'ising':
             from compiler.ising import IsingCompiler, IsingParams, build_basis_reprs, build_hamil, build_zz
@@ -107,9 +141,9 @@ class BeamModelAdapter:
                 model_params,
                 **cls.build_compiler_kwargs(data, build_obj, build_obs),
             )
-            parse_basis = lambda strings: build_basis_reprs(model_params.L, strings)
-            initial_basis = lambda initial: build_basis_reprs(model_params.L, initial)
-            required_basis = parse_basis(basis_config['required'])
+            build_basis = lambda strings: build_basis_reprs(model_params.L, strings)
+            build_initial_basis = build_basis
+            required_basis = build_basis(basis_config['required'])
 
         elif model_type == 'heisenberg':
             from compiler.heisenberg import HeisenbergCompiler, HeisenbergParams, build_basis_reprs, build_hamil, build_szz
@@ -133,9 +167,9 @@ class BeamModelAdapter:
                 model_params,
                 **cls.build_compiler_kwargs(data, build_obj, build_obs),
             )
-            parse_basis = lambda strings: build_basis_reprs(model_params.L, strings)
-            initial_basis = lambda initial: build_basis_reprs(model_params.L, initial)
-            required_basis = parse_basis(basis_config['required'])
+            build_basis = lambda strings: build_basis_reprs(model_params.L, strings)
+            build_initial_basis = build_basis
+            required_basis = build_basis(basis_config['required'])
 
         else:
             raise ValueError(f'unknown model type: {model_type}')
@@ -166,25 +200,25 @@ class BeamModelAdapter:
             state = json.loads(resume_state.read_text())
             if state['model_type'] != model_type or state['model'] != asdict(model_params):
                 raise ValueError('resume state model parameters do not match config')
-            basis = parse_basis(json.loads(resume_basis.read_text()))
+            basis = build_basis(json.loads(resume_basis.read_text()))
             start_step = state.get('step', -1) + 1
             records = state.get('records', [])
             events = json.loads(resume_events.read_text()) if resume_events.exists() else {'steps': []}
             drop_counts = {}
             for step_event in events.get('steps', []):
-                for rep in parse_basis(step_event.get('drop', [])):
+                for rep in build_basis(step_event.get('drop', [])):
                     key = rep.trans_canon
                     drop_counts[key] = drop_counts.get(key, 0) + 1
             # apply the last move
             if events.get('steps'):
                 basis_map = {rep.trans_canon: rep.trans_canon_rep for rep in basis}
-                for rep in parse_basis(events['steps'][-1].get('drop', [])):
+                for rep in build_basis(events['steps'][-1].get('drop', [])):
                     basis_map.pop(rep.trans_canon, None)
-                for rep in parse_basis(events['steps'][-1].get('grow', [])):
+                for rep in build_basis(events['steps'][-1].get('grow', [])):
                     basis_map[rep.trans_canon] = rep.trans_canon_rep
                 basis = list(basis_map.values())
         else:
-            basis = initial_basis(basis_config['initial'])
+            basis = build_initial_basis(basis_config['initial'])
             start_step, records = 0, []
             events = {
                 'initial_basis': [str(rep.trans_canon_rep) for rep in basis],

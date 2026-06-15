@@ -303,11 +303,15 @@ class HubbardCompiler:
                             self.var_index[key] = len(self.vars)
                             self.vars.append(MajoranaMonomial(L=self.L, mask=key))
 
+    def fourier_phase(self, q: int, r: int) -> complex:
+        # q is the integer momentum-sector index
+        return np.exp(1j * 2 * np.pi * q * r / self.L)
+
     @staticmethod
-    def nonzero_fourier(monomial: MajoranaMonomial, n: int) -> bool:
+    def nonzero_fourier(monomial: MajoranaMonomial, q: int) -> bool:
         if monomial.period_sign == 1:
-            return (n * monomial.period) % monomial.L == 0
-        return (2 * n * monomial.period) % (2 * monomial.L) == monomial.L
+            return (q * monomial.period) % monomial.L == 0
+        return (2 * q * monomial.period) % (2 * monomial.L) == monomial.L
 
     def _build_block_reprs(self):
         '''
@@ -316,17 +320,17 @@ class HubbardCompiler:
         '''
         self.block_reprs = []
         self.block_momenta = []
-        for n in range(self.L//2 + 1):
+        for q in range(self.L//2 + 1):
             parity_reprs = {}
             for monomial in self.basis_reprs:
-                if not self.nonzero_fourier(monomial, n):
+                if not self.nonzero_fourier(monomial, q):
                     continue
                 parity = monomial.fermion_parity(spin=True)
                 parity_reprs.setdefault(parity, []).append(monomial)
 
             for parity in sorted(parity_reprs):
                 self.block_reprs.append(parity_reprs[parity])
-                self.block_momenta.append(n)
+                self.block_momenta.append(q)
 
     def _build_psd(self):
         '''
@@ -335,15 +339,14 @@ class HubbardCompiler:
         self.psd_blocks = []
 
         # K symmetry equals M(k) \succcurlyeq 0 and M(-k) \succcurlyeq 0
-        for n, block_basis in zip(self.block_momenta, self.block_reprs):
-            k = 2*np.pi * n / self.L
+        for q, block_basis in zip(self.block_momenta, self.block_reprs):
             psd = PSDConstraints(n_vars=len(self.vars), dim=len(block_basis))
 
             for row, monomial1 in enumerate(block_basis):
                 for col, monomial2 in enumerate(block_basis):
                     expr = {}
                     for r in range(self.L):
-                        monomial1r, rot_sign = monomial1.translate(r)
+                        monomial1r, trans_sign = monomial1.translate(r)
                         monomial, mul_sign = self._moment(monomial1r, monomial2)
 
                         if not self._sym_allowed(monomial):
@@ -356,8 +359,8 @@ class HubbardCompiler:
                         # combine Fourier phase, translation/multiplication/canonical signs,
                         # then divide by the hermitian phase so moment variables stay real.
                         coeff = (
-                            np.exp(1j * k * r) / self.L
-                            * rot_sign * mul_sign * canon_sign
+                            self.fourier_phase(q, r) / self.L
+                            * trans_sign * mul_sign * canon_sign
                             / monomial.hermitian_phase()
                         )
                         idx = self.var_index[key]
