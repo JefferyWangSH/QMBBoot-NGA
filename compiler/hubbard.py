@@ -395,6 +395,10 @@ class HubbardCompiler:
         return op
 
     def _compile_hamil_ward(self, monomial: MajoranaMonomial) -> LinearExpr | None:
+        r'''
+            return [\sum_i H_i, O] as a compiled linear expression;
+            early return None if any nontrivial term is not representable by the current SDP variables.
+        '''
         expr = {}
         seen = set()
         support = monomial.mask
@@ -474,36 +478,12 @@ class HubbardCompiler:
                     self.affines.add(expr)
                     self.ward_ops['hamil'] += 1
 
-    def _number_comm(self, monomial: MajoranaMonomial, spin: str) -> MajoranaOperator:
+    def _compile_number_ward(self, monomial: MajoranaMonomial, spin: str) -> LinearExpr | None:
         r'''
-            return [\sum_i N_{i,s}, O] as a Majorana operator
+            return [\sum_i N_{i,s}, O] as a compiled linear expression;
+            early return None if any nontrivial term is not representable by the current SDP variables.
             spin: 'u' or 'd'
         '''
-        assert spin in ('u', 'd')
-        spin_offset = 0 if spin == 'u' else 2
-        op = MajoranaOperator()
-
-        support = monomial.mask
-        while support:
-            bit = support & -support
-            mode = bit.bit_length() - 1
-            site, rem = divmod(mode, 4)
-            support ^= bit
-            if rem // 2 != spin_offset // 2:
-                continue
-
-            lo_bit = 1 << (4*site + spin_offset)
-            number_mask = lo_bit | (lo_bit << 1)
-            overlap = monomial.mask & number_mask
-            if overlap == 0 or overlap == number_mask:
-                continue
-
-            prod = MajoranaMonomial(self.L, monomial.mask ^ number_mask)
-            sign = -1 if overlap == lo_bit else 1
-            op.add(prod, 1j * sign)
-        return op
-
-    def _compile_number_ward(self, monomial: MajoranaMonomial, spin: str) -> LinearExpr | None:
         assert spin in ('u', 'd')
         spin_offset = 0 if spin == 'u' else 2
         expr = {}
@@ -589,35 +569,12 @@ class HubbardCompiler:
                 self.affines.add(expr)
                 self.ward_ops[f'N{spin}'] += 1
 
-    def _spin_comm(self, monomial: MajoranaMonomial, spin: str) -> MajoranaOperator:
+    def _compile_spin_ward(self, monomial: MajoranaMonomial, spin: str) -> LinearExpr | None:
         r'''
-            return [\sum_i S_{i,s}, O] as a Majorana operator
+            return [\sum_i S_{i,s}, O] as a compiled linear expression;
+            early return None if any nontrivial term is not representable by the current SDP variables.
             spin: '+' or '-'
         '''
-        assert spin in ('+', '-')
-        op = MajoranaOperator()
-        support = monomial.mask
-        while support:
-            bit = support & -support
-            site = (bit.bit_length() - 1) // 4
-            support &= ~(0xf << (4*site))
-
-            for rem1, rem2, coeff in _SPIN_LADDER_TERMS[spin]:
-                mode1 = 4*site + rem1
-                mode2 = 4*site + rem2
-                spin_mask = (1 << mode1) | (1 << mode2)
-                if (monomial.mask & spin_mask).bit_count() != 1:
-                    continue
-
-                sign = -1 if (
-                    (monomial.mask & ((1 << mode1) - 1)).bit_count()
-                    + (monomial.mask & ((1 << mode2) - 1)).bit_count()
-                ) & 1 else 1
-                prod = MajoranaMonomial(self.L, monomial.mask ^ spin_mask)
-                op.add(prod, 2 * coeff * sign)
-        return op
-
-    def _compile_spin_ward(self, monomial: MajoranaMonomial, spin: str) -> LinearExpr | None:
         assert spin in ('+', '-')
         expr = {}
         support = monomial.mask

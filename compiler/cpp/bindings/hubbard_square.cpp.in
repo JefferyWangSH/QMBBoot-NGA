@@ -6,7 +6,7 @@ cfg['include_dirs'] = ['@REPO_ROOT@']
 %>
 */
 
-#include "compiler/cpp/hubbard_kernel.hpp"
+#include "compiler/cpp/kernels/hubbard_square.hpp"
 #include "operators/cpp/py_mask.hpp"
 
 #include <pybind11/pybind11.h>
@@ -14,13 +14,13 @@ cfg['include_dirs'] = ['@REPO_ROOT@']
 #include <utility>
 
 namespace py = pybind11;
-using MajoranaMonomial = qmbboot::operators::MajoranaMonomial<@L@>;
+using MajoranaMonomialSquare = qmbboot::operators::MajoranaMonomialSquare<@LX@, @LY@>;
 using qmbboot::operators::py_mask::words_to_mask;
 
 namespace {
 
-py::object sym_canon(const MajoranaMonomial& monomial, bool sign) {
-    auto result = qmbboot::compiler::hubbard::sym_canon<@L@>(monomial);
+py::object sym_canon(const MajoranaMonomialSquare& monomial, bool sign) {
+    auto result = qmbboot::compiler::hubbard_square::sym_canon<@LX@, @LY@>(monomial);
     if (!result.has_value()) {
         return py::none();
     }
@@ -36,7 +36,7 @@ py::object sym_canon(const MajoranaMonomial& monomial, bool sign) {
 }  // namespace
 
 PYBIND11_MODULE(@MODULE_NAME@, m) {
-    m.doc() = "JIT C++ Hubbard compiler kernels";
+    m.doc() = "JIT C++ Hubbard square compiler kernels";
 
     m.def("sym_canon", &sym_canon, py::arg("monomial"), py::arg("sign") = false);
 }

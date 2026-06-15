@@ -360,28 +360,11 @@ class HeisenbergCompiler:
                     self.affines.add(expr)
                     self.ward_ops['hamil'] += 1
 
-    def _spin_comm(self, pstr: PauliString, axis: str) -> PauliOperator:
+    def _compile_spin_ward(self, pstr: PauliString, axis: str) -> LinearExpr | None:
         '''
-            return [S^a_tot, O] as a Pauli operator
+            early return [S^a_tot, O] as a compiled linear expression
         '''
         assert axis in ('X', 'Y', 'Z')
-        axis_code = _PAULI_CODE[axis]
-        op = PauliOperator()
-        support = pstr.mask
-        while support:
-            bit = support & -support
-            site = (bit.bit_length() - 1) // 2
-            p_code = (pstr.mask >> (2*site)) & 3
-            support &= ~(3 << (2*site))
-            if p_code == axis_code:
-                continue
-
-            new_mask = (pstr.mask & ~(3 << (2*site))) | ((axis_code ^ p_code) << (2*site))
-            coeff = _PAULI_PHASE[_PAULI_MUL_PHASE_POWER[axis_code][p_code]]
-            op.add(PauliString(self.L, new_mask), coeff)
-        return op
-
-    def _compile_spin_ward(self, pstr: PauliString, axis: str) -> LinearExpr | None:
         axis_code = _PAULI_CODE[axis]
         expr = {}
         support = pstr.mask

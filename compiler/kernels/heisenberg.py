@@ -10,7 +10,7 @@ from operators.pauli_jit import PauliString
 __all__ = ['sym_canon']
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_TEMPLATE_PATH = _REPO_ROOT / 'compiler' / 'cpp' / 'heisenberg_kernel_binding.cpp.in'
+_TEMPLATE_PATH = _REPO_ROOT / 'compiler' / 'cpp' / 'bindings' / 'heisenberg.cpp.in'
 _CACHE_ROOT = _REPO_ROOT / '.cache' / 'compiler' / 'kernels' / 'heisenberg'
 
 
@@ -18,7 +18,7 @@ def _source_hash() -> str:
     h = hashlib.sha256()
     for path in (
         _TEMPLATE_PATH,
-        _REPO_ROOT / 'compiler' / 'cpp' / 'heisenberg_kernel.hpp',
+        _REPO_ROOT / 'compiler' / 'cpp' / 'kernels' / 'heisenberg.hpp',
         _REPO_ROOT / 'operators' / 'cpp' / 'pauli.hpp',
         _REPO_ROOT / 'operators' / 'cpp' / 'py_mask.hpp',
     ):

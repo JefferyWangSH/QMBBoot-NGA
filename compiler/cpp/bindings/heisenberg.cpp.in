@@ -6,7 +6,7 @@ cfg['include_dirs'] = ['@REPO_ROOT@']
 %>
 */
 
-#include "compiler/cpp/heisenberg_kernel.hpp"
+#include "compiler/cpp/kernels/heisenberg.hpp"
 #include "operators/cpp/py_mask.hpp"
 
 #include <pybind11/pybind11.h>

@@ -8,7 +8,7 @@ import cppimport
 __all__ = ['MajoranaMonomialSquare']
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_TEMPLATE_PATH = _REPO_ROOT / 'operators' / 'cpp' / 'majorana_square_binding.cpp.in'
+_TEMPLATE_PATH = _REPO_ROOT / 'operators' / 'cpp' / 'bindings' / 'majorana_square.cpp.in'
 _CACHE_ROOT = _REPO_ROOT / '.cache' / 'operators' / 'majorana_square'
 
 

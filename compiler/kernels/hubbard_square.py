@@ -10,7 +10,7 @@ from operators.majorana_square_jit import MajoranaMonomialSquare
 __all__ = ['sym_canon']
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_TEMPLATE_PATH = _REPO_ROOT / 'compiler' / 'cpp' / 'hubbard_square_kernel_binding.cpp.in'
+_TEMPLATE_PATH = _REPO_ROOT / 'compiler' / 'cpp' / 'bindings' / 'hubbard_square.cpp.in'
 _CACHE_ROOT = _REPO_ROOT / '.cache' / 'compiler' / 'kernels' / 'hubbard_square'
 
 
@@ -18,7 +18,7 @@ def _source_hash() -> str:
     h = hashlib.sha256()
     for path in (
         _TEMPLATE_PATH,
-        _REPO_ROOT / 'compiler' / 'cpp' / 'hubbard_square_kernel.hpp',
+        _REPO_ROOT / 'compiler' / 'cpp' / 'kernels' / 'hubbard_square.hpp',
         _REPO_ROOT / 'operators' / 'cpp' / 'majorana_square.hpp',
         _REPO_ROOT / 'operators' / 'cpp' / 'py_mask.hpp',
     ):
