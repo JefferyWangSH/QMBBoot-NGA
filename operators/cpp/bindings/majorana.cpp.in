@@ -121,7 +121,7 @@ PYBIND11_MODULE(@MODULE_NAME@, m) {
         .def_property_readonly("period", &period)
         .def_property_readonly("period_sign", &period_sign)
         .def("invert", &MajoranaMonomial::invert)
-        .def("c4_rotate", &MajoranaMonomial::c4_rotate, py::arg("up_quarters") = 0, py::arg("dn_quarters") = 0)
+        .def("c4_rotate", &MajoranaMonomial::c4_rotate, py::arg("up_quarters"), py::arg("dn_quarters"))
         .def("spin_exchange", &MajoranaMonomial::spin_exchange)
 
         // Python protocol

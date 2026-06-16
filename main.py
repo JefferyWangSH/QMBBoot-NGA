@@ -83,12 +83,19 @@ class ModelAdapter:
                 model_params,
                 **cls.build_compiler_kwargs(data, build_obj, build_obs),
             )
-            build_basis = lambda strings: [MajoranaMonomial.from_str(model_params.L, s).trans_canon_rep for s in strings]
-            build_initial_basis = lambda initial: build_basis(initial) if isinstance(initial, list) else build_basis_reprs(model_params.L, **initial)
+            build_basis = lambda strings: [
+                MajoranaMonomial.from_str(model_params.L, s).trans_canon_rep
+                for s in strings
+            ]
+            build_initial_basis = lambda initial: (
+                build_basis(initial)
+                if isinstance(initial, list)
+                else build_basis_reprs(model_params.L, **initial)
+            )
             required_basis = build_basis(basis_config['required'])
 
         elif model_type == 'hubbard_square':
-            from compiler.hubbard_square import HubbardSquareCompiler, HubbardSquareParams, build_hamil, build_szz
+            from compiler.hubbard_square import HubbardSquareCompiler, HubbardSquareParams, build_basis_reprs, build_hamil, build_szz
             from operators.majorana_square import MajoranaMonomialSquare
             model_params = HubbardSquareParams(**model_config)
 
@@ -118,7 +125,11 @@ class ModelAdapter:
                 MajoranaMonomialSquare.from_str(model_params.Lx, model_params.Ly, s).trans_canon_rep
                 for s in strings
             ]
-            build_initial_basis = build_basis
+            build_initial_basis = lambda initial: (
+                build_basis(initial)
+                if isinstance(initial, list)
+                else build_basis_reprs(model_params.Lx, model_params.Ly, **initial)
+            )
             required_basis = build_basis(basis_config['required'])
 
         elif model_type == 'ising':

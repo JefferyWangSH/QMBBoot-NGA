@@ -260,6 +260,7 @@ class HubbardCompiler:
 
     def _sym_allowed(self, monomial: MajoranaMonomial) -> bool:
         '''
+            quick symmetry filter for monomials that are symmetry eigenoperators;
             SDP variables should have even fermion parity for each spin and even K parity.
         '''
         if not hasattr(self, '_sym_allowed_cache'):

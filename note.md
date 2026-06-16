@@ -100,6 +100,13 @@ $$
 $$
 given stationary states $[\rho,H]=0$. These constraints are often known as stationarity constraints.
 
+In summary, the bootstrap uses (discrete) symmetries in three closely related ways:
+* *Selection rules for symmetry eigenoperators:* if an operator is already a symmetry eigenoperator with nontrivial charge, its expectation value vanishes in a symmetric state and can be removed directly (implemented as `sym_allowed`).
+* *Canonicalization and identification of equivalent moments:* operators related by symmetry transformations represent the same expectation value (implemented as `sym_canon`).
+* *Block decomposition of PSD matrices into independent charge or momentum sectors:* in practice this is simplest for discrete Abelian symmetries, where the operator basis can be chosen to carry definite symmetry charges (as discussed below).
+
+For continuous symmetries, one may either use a convenient discrete subgroup as above, or impose the infinitesimal form of the symmetry as Ward identities.
+
 <a id="symmetry-blocks"></a>
 #### *1.2. Symmetry blocks*
 
@@ -751,7 +758,146 @@ We will show that the presence of $\ksymm$-symmetry facilitates the bootstrap ca
 
 For TFI chain and general real-matrix Hamiltonians under certain basis, the assumption of real symmetric $\rho$ is physically natural. However, if the $\ksymm$-symmetry is spontaneously broken, e.g. by a non-trivial spin current, it can not see the symmetry-odd one-point order parameter, but the ordered phase may still be detected in symmetry-even two-point correlations. How to bootstrap dynamics? (find refs.)
 
-### *6. Hubbard chain*
+### *6. $J_1$-$J_2$ Heisenberg chain*
+Spin-$1/2$ $J_1$-$J_2$ Heisenberg chain
+$$
+\begin{aligned}
+    H &= J_1 \sum_i \mathbf{S}_i \cdot \mathbf{S}_{i+1} + J_2 \sum_i \mathbf{S}_i \cdot \mathbf{S}_{i+2}\\[5pt]
+    &= J_1/4 \sum_{i,a} \sigma^a_i \sigma^a_{i+1} + J_2/4 \sum_{i,a} \sigma^a_i \sigma^a_{i+2}.
+\end{aligned}
+$$
+Let $\alpha=J_2/J_1$ in the antiferromagnetic frustrated regime $J_1>0$, $J_2\geq0$. The thermodynamic phase diagram is
+* $0\leq\alpha<\alpha_c$: gapless Luttinger liquid connected to the nearest-neighbor Heisenberg chain at $\alpha=0$.
+* $\alpha_c\simeq0.241167$: Berezinskii-Kosterlitz-Thouless transition.
+* $\alpha>\alpha_c$: gapped dimerized phase with two symmetry-related dimer patterns.
+* $\alpha=1/2$: Majumdar-Ghosh point, where the two nearest-neighbor singlet dimer coverings are exact ground states.
+* At larger $\alpha$, the system remains dimerized but spin correlations become increasingly incommensurate.
+
+Although the dimerized phase spontaneously breaks one-site translation in a pure thermodynamic ground state, the Hamiltonian remains one-site translation invariant. For energy-density bootstrap bounds, one can still restrict to a one-site translation-invariant density matrix: the symmetric mixture of the two dimerized ground states has the same energy. However, this forces the one-point dimer order parameter
+$$
+    \left\langle
+    \mathbf{S}_i\cdot\mathbf{S}_{i+1}
+    - \mathbf{S}_{i+1}\cdot\mathbf{S}_{i+2}
+    \right\rangle
+$$
+to vanish. Dimerization should instead be diagnosed either with a two-site unit cell or with translation-invariant dimer-dimer correlations. Similar arguments apply for $SO(3)$ symmetry and many others.
+
+#### *6.1. $SO(3)$ symmetry*
+The isotropic Heisenberg chain has full spin-rotation symmetry. On states this is implemented by $SU(2)$, while on Pauli-vector operators it descends to $SO(3)$. We use the $SO(3)$ language below because the SDP moments are built from Pauli strings. In principle, one can use the full non-abelian $SO(3)$ symmetry to reduce PSD matrices. The operator basis at fixed momentum carries a representation of $SO(3)$,
+$$
+    \mathcal{U}(R)^\dag \mathcal{O}_a(k) \mathcal{U}(R)=\sum_b D_{ba}(R)\mathcal{O}_b(k).
+$$
+For an $SO(3)$-invariant density matrix, the moment matrix must commute with this representation. After rotating the Pauli-string basis into irreducible tensor sectors,
+$$
+    \mathcal{S}(k)\simeq\bigoplus_\ell\left(V_\ell\otimes\mathbb{C}^{m_\ell}\right),
+$$
+Schur's lemma gives
+$$
+    M(k)=\bigoplus_\ell\left(I_{2\ell+1}\otimes A_\ell(k)\right),\quad A_\ell(k)\succeq0.
+$$
+This would be the clean full-$SO(3)$ PSD block decomposition. We do not start with it because Pauli strings are not irreducible tensor operators; constructing this basis requires Clebsch-Gordan-like linear combinations and would complicate the prototype.
+
+The practical plan is therefore twofold. First, use an abelian subgroup of the $SO(3)$ action to reduce PSD blocks. The convenient choice is the proper $\pi$-rotation subgroup
+$$
+    C_2\times C_2=\{1, R_{xy}, R_{yz}, R_{zx}\},
+$$
+where
+$$
+\begin{aligned}
+    &R_{xy}: \mathcal{O}\mapsto (-1)^{N_X+N_Y}\mathcal{O},\\[5pt]
+    &R_{yz}: \mathcal{O}\mapsto (-1)^{N_Y+N_Z}\mathcal{O},\\[5pt]
+    &R_{zx}: \mathcal{O}\mapsto (-1)^{N_Z+N_X}\mathcal{O}.
+\end{aligned}
+$$
+Here $N_X,N_Y,N_Z$ count the Pauli labels in the normal-form monomial $\mathcal{O}$. Since Pauli strings are eigenoperators of this abelian subgroup, if the density matrix is invariant under this subgroup, any monomial odd under one of these rotations has zero expectation value. Hence a necessary condition for a nonzero moment is
+$$
+    N_X = N_Y = N_Z \pmod 2.
+$$
+
+The same $C_2\times C_2$ charge can further block diagonalize each momentum PSD block. If $O_a(-k)$ and $O_b(k)$ carry different $\pi$-rotation charges, then $\langle O_a(k)^\dag O_b(k)\rangle=0$. Thus
+$$
+    M(k)=\bigoplus_q M_q(k),\quad q\in C_2\times C_2.
+$$
+
+Second, we impose the full continuous $SO(3)$ symmetry as affine Ward identities,
+$$
+    \left\langle [S^a_{\mathrm{tot}},\mathcal{O}]\right\rangle=0,\quad a=x,y,z.
+$$
+Thus the abelian subgroup gives an immediate PSD-size reduction in the original Pauli-string basis, while the full non-abelian $SO(3)$ still contributes useful linear constraints without requiring an irrep rotation.
+
+#### *6.2. Sign symmetry*
+Single-axis substitutions such as
+$$
+    F_x: (X,Y,Z) \mapsto (-X,Y,Z)
+$$
+are not $SO(3)$ rotations, but the Heisenberg Hamiltonian is still invariant under them. Together with $F_y$ and $F_z$, they form a sign-flip group
+$$
+    C_2^3 = \{(s_x,s_y,s_z):s_a=\pm1\}
+$$
+acting on Pauli labels by $\sigma^a\mapsto s_a\sigma^a$. The aforementioned proper $\pi$-rotations are the determinant +1 subgroup of this larger group. Hence the sign symmetries set a moment to zero whenever its normal form is odd under at least one $F_a$. In particular, a nonzero normal-form moment must have
+$$
+    N_X = N_Y = N_Z = 0 \pmod 2.
+$$
+
+This larger $C_2^3$ is useful for eliminating moment variables, but it does not produce eight independent PSD blocks. A PSD entry contains a product $\mathcal{O}_a^\dag \mathcal{O}_b$. It can be nonzero only if this product is even under all three flips. Therefore two basis operators can couple whenever their parity labels are equal up to the common flip 111:
+$$
+    p(\mathcal{O}_a) = p(\mathcal{O}_b)
+    \quad\text{or}\quad
+    p(\mathcal{O}_a) = p(\mathcal{O}_b) + 111.
+$$
+For instance,
+$$
+    \underbrace{(X_i)}_{100} \underbrace{(Y_iZ_j)}_{011} = \underbrace{iZ_iZ_j}_{000},
+$$
+so the sectors $100$ and $011$ are connected rather than separated. Thus the eight raw $C_2^3$ labels pair into exactly four PSD blocks,
+$$
+    000/111:(+,+),\quad
+    100/011:(-,+),\quad
+    010/101:(-,-),\quad
+    001/110:(+,-).
+$$
+In the brackets, we label the $C_2\times C_2$ charge by the two independent $\pi$-rotation signs
+$$
+    (q_{xy}, q_{yz}) = \left((-1)^{N_X+N_Y},(-1)^{N_Y+N_Z}\right).
+$$
+In short, the $C_2\times C_2$ quotient gives the PSD block labels, while the full $C_2^3$ sign symmetry gives additional zero-moment rules.
+
+#### *6.3. Permutation*
+For every permutation $\tau\in S_3$ of the spin labels $x,y,z$,
+$$
+    \langle \mathcal{O}\rangle = \left\langle \tau(\mathcal{O})\right\rangle.
+$$
+Bare $S_3$ permutations are not literally a subgroup of $SO(3)$: odd permutations have determinant -1.
+
+#### *6.4. Other positivity constraints (not implemented)*
+The SDP bound shall be improved by adding an extra positivity constraint on a local $k$-body reduced density matrix,
+$$
+    \rho_{[k]}
+    =\frac{1}{2^k}\sum_{a_1,\ldots,a_k}
+    \left\langle \sigma_1^{a_1}\sigma_2^{a_2}\cdots\sigma_k^{a_k}\right\rangle
+    \sigma_1^{a_1}\sigma_2^{a_2}\cdots\sigma_k^{a_k}
+    \succeq 0,
+$$
+where $a_i\in\{0,x,y,z\}$ and $\sigma_i^0=\mathbf 1$. The cost is that $\rho_{[k]}$ is a $2^k\times 2^k$ PSD matrix. And this is only useful if the $k$-site local algebra is not already contained in the moment-matrix basis. In our NGA setting, the active basis is grown from Hamiltonian descendants and need not contain all moments appearing in $\rho_{[k]}$; adding this constraint would therefore require adding those local RDM moments as required variables, or treating it as a separate fixed-basis enhancement.
+
+Refs:
+* https://arxiv.org/pdf/2310.05844, main benchmark on Heisenberg chain.
+
+    > For $J_2\leq J_1$, they use sparse monomials of the schematic form
+    > $$
+    >     1,
+    >     \quad \sigma_i^a,
+    >     \quad \sigma_i^a\sigma_{i+j}^b,
+    >     \quad \sigma_i^a\sigma_{i+1}^b\sigma_{i+2}^c,
+    >     \quad \sigma_i^a\sigma_{i+1}^b\sigma_{i+2}^c\sigma_{i+3}^d,
+    > $$
+    > where $j$ is restricted to a finite range and $a,b,c,d\in\{x,y,z\}$. For $J_2>J_1$, they adapt the three-body sector to the next-nearest-neighbor structure, using monomials such as
+    > $$
+    >     \sigma_i^a\sigma_{i+2}^b\sigma_{i+4}^c.
+    > $$
+    > This sparse basis is more targeted than a full degree-truncated Pauli basis.
+
+### *7. Hubbard chain*
 $$
     H = -t \sum_{i,\sigma} \left(c^\dag_{i,\sigma} c_{i+1,\sigma} + c^\dag_{i+1,\sigma} c_{i,\sigma}\right) + U \sum_i \left(n_{i\uparrow}-\frac{1}{2}\right) \left(n_{i\downarrow}-\frac{1}{2}\right).
 $$
@@ -760,7 +906,7 @@ $$
     H = \frac{t}{2} \sum_{i,\sigma} \gamma^T_{i,\sigma} Y \gamma_{i+1,\sigma} - \frac{U}{4} \sum_{i} \gamma^1_{i\uparrow} \gamma^2_{i\uparrow} \gamma^1_{i\downarrow} \gamma^2_{i\downarrow}.
 $$
 
-#### *6.1. Fermion parity*
+#### *7.1. Fermion parity*
 Fermion parity $P=(-1)^N=e^{i\pi N}$ is the nontrivial element of the $\mathbb{Z}_2$ subgroup $\{1,P\}$ of the charge $U(1)$ symmetry. Fermion parity can remain a symmetry even when the full $U(1)$ symmetry is absent, as in pairing Hamiltonians where particle number changes by pairs. The superselection principle claims that coherent superpositions between opposite parity sectors are not physical (while classical mixtures of opposite-parity states are permitted). For example, BCS wave function mixes states with different particle numbers yet still with same parity, and there is no spontaneous $P$-broken states observed in laboratory. Equivalently, every physical $\rho$ must commute with fermion parity, $[\rho,P]=0$, such that $\langle O\rangle = \langle P^{-1} O P\rangle$ for any operator $O$. In our case, individual Majorana fermion is parity-odd, $P^{-1}\gamma_a P=-\gamma_a$. Therefore a Majorana monomial $\Gamma=\prod\gamma_i^a$ with degree $q$ transforms as $P^{-1} \Gamma P = (-1)^q \Gamma$. As a result, odd-degree monomial moments must have vanishing expectation value according to the parity constraint,
 $$
     \left\langle \Gamma\right\rangle
@@ -784,7 +930,7 @@ $
 $.
 A Majorana monomial has a definite spin-parity charge $(p_\uparrow,p_\downarrow)$, determined by the numbers of up- and down-spin Majoranas modulo two. Averaging over $P_\uparrow$ and $P_\downarrow$ projects out monomial expectations unless $(p_\uparrow,p_\downarrow)=(0,0)$. At the moment-matrix level, $\langle O_i^\dag O_j\rangle$ vanishes unless $O_i$ and $O_j$ carry the same spin-parity charge. Therefore the Hubbard bootstrap can reduce independent Majorana moment variables to the spin-parity-even sector and decompose PSD matrices into spin-parity blocks.
 
-#### *6.2. $U(1)$ charge symmetry*
+#### *7.2. $U(1)$ charge symmetry*
 The particle number $N$ is the conserved charge generating the global $U(1)$ symmetry, $U(\theta)=e^{i\theta N}$. It acts on fermion operators as
 $$
     U(\theta)c U(\theta)^{-1}=e^{-i\theta} c, \quad U(\theta)c^\dag U(\theta)^{-1}=e^{i\theta}c^\dag.
@@ -817,7 +963,7 @@ $$
 $$
 Thus Ward identities generated by $(N_\uparrow,N_\downarrow)$ are equivalent to those generated by $(N,S^z)$. At the group-element level, the charge-spin parametrization has a $\mathbb{Z}_2$ redundancy because $e^{i\pi N}=e^{i2\pi S^z}=(-1)^N$, giving $U_\uparrow(1)\times U_\downarrow(1) \simeq \frac{U_c(1)\times U_s(1)}{\mathbb{Z}_2}$. This global quotient is irrelevant for Ward identities, which only depend on infinitesimal generators.
 
-#### *6.3. Complex conjugation $\ksymm$*
+#### *7.3. Complex conjugation $\ksymm$*
 The Hubbard model stays invariant under complex conjugation $\ksymm$, which is an anti-unitary symmetry with $\ksymm^2=1$ and
 $$
     \ksymm i\ksymm = -i, \quad \ksymm c_{i\sigma}\ksymm = c_{i\sigma}, \quad \ksymm c^\dag_{i\sigma}\ksymm = c^\dag_{i\sigma}.
@@ -826,7 +972,7 @@ Majorana fermions transform accordingly as $\ksymm \gamma_a\ksymm = \eta_a \gamm
 
 The assumed $\ksymm$-invariance of $\rho$ forbids the direct detection of non-zero current expectation values, such as charge and spin currents, $j^c\sim \sum_\sigma i(c^\dag_{x+1,\sigma}c_{x,\sigma}-c^\dag_{x,\sigma}c_{x+1,\sigma})$ and $j^s\sim \sum_\sigma i\sigma (c^\dag_{x+1,\sigma}c_{x,\sigma}-c^\dag_{x,\sigma}c_{x+1,\sigma})$, since both of them are $\ksymm$-odd operators. However, current-current correlations are $\ksymm$-even and therefore computable. A non-zero $\langle j^c\rangle$ also breaks time-reversal symmetry while $\langle j^s\rangle$ need not.
 
-#### *6.4. $O(2)$ in the Majorana plane*
+#### *7.4. $O(2)$ in the Majorana plane*
 For each spin species, the two Majoranas
 $$
     \boldsymbol\gamma_{i\sigma}
@@ -910,7 +1056,7 @@ $$
 $$
 of the Majorana-plane symmetry. This subgroup is weaker than the full continuous symmetry, but it is cheap because every image of a Majorana monomial is still a single normal-ordered Majorana monomial up to a sign. In practice, the first implementation target is variable reduction by the spin-resolved quarter rotations.
 
-#### *6.5. Spin $SU(2)$*
+#### *7.5. Spin $SU(2)$*
 Spin rotations form a full $SU(2)$ symmetry,
 $$
     S^a=\frac12\sum_x c^\dag_{x\alpha}\sigma^a_{\alpha\beta}c_{x\beta},
@@ -937,7 +1083,7 @@ $$
 $$
 The $S^z$ Ward identity is already contained in the $U_\uparrow(1)\times U_\downarrow(1)$ Ward identities, while $S^\pm$ produce additional spin-flip linear constraints. We avoid full spin-irrep PSD blocking because it requires dense rotations of the Majorana basis.
 
-#### *6.6. Spin exchange*
+#### *7.6. Spin exchange*
 Spin exchange $\mathcal{P}_{ud}:\uparrow\leftrightarrow\downarrow$ generates a $\mathbb{Z}_2$ subgroup of the full spin-charge symmetry $U(1)\times SU(2)/\mathbb{Z}_2$. The quotient identifies the charge-$\pi$ rotation with the spin-$SU(2)$ center, since both act on the fermionic Fock space as fermion parity $e^{i\pi N}=e^{i2\pi S^a}=(-1)^N$. Thus the direct product would double-count the same parity operator. Up to a charge $U(1)$ phase, spin exchange is a $\pi$ spin rotation inside $SU(2)$,
 $$
     \mathcal{P}_{ud} = e^{-i\pi N/2} e^{i\pi S^x}.
@@ -959,152 +1105,120 @@ $$
 $$
 which reduces spin-exchange-related moment variables to a single representative.
 
-#### *6.7. Time reversion*
-todo
+#### *7.7. Time reversal*
+For spinful fermions the physical time-reversal operator is antiunitary,
+$$
+    \mathcal{T}=i\sigma_y \ksymm,
+$$
+where $i\sigma_y$ acts on the spin index and
+$$
+    \mathcal{T}c_{i\uparrow}\mathcal{T}^{-1}=c_{i\downarrow},
+    \quad
+    \mathcal{T}c_{i\downarrow}\mathcal{T}^{-1}=-c_{i\uparrow},
+    \quad
+    \mathcal{T}i\mathcal{T}^{-1}=-i.
+$$
+Unlike plain $\ksymm$, this transformation is not diagonal on individual Majorana monomials, e.g. a monomial is generally mapped to a different spin-flipped monomial, and hence is not suitable for being implemented as a simple selection rule. For the present Hubbard compiler, considering time reversal gives no additional variable reduction because the unitary part $i\sigma_y$ is already generated by spin exchange together with a spin-resolved Majorana-plane $C_4^2$ rotation,
+$$
+    i\sigma_y = \mathcal{P}_{ud}\circ C_{4,\downarrow}^2 = C_{4,\uparrow}^2\circ \mathcal{P}_{ud}.
+$$
+For example,
+$$
+    \mathcal{P}_{ud}\circ C_{4,\downarrow}^2:
+    \quad
+    c_{i\uparrow} \xrightarrow{C^2_{4,\downarrow}} c_{i\uparrow} \xrightarrow{\mathcal{P}_{ud}} c_{i\downarrow},
+    \quad
+    c_{i\downarrow} \xrightarrow{C^2_{4,\downarrow}} -c_{i\downarrow} \xrightarrow{\mathcal{P}_{ud}} -c_{i\uparrow}.
+$$
+Therefore, at the level of SDP variable reduction, TRS is redundant once the complex conjugation, spin exchange, and spin-resolved majorana-plane rotation symmetries are already individually imposed.
 
-#### *6.8. Particle-hole and $\eta$-pairing at half-filling*
-todo
+#### *7.8. Particle-hole and $\eta$-pairing at half-filling*
+Not implemented and specific to the half-filling case.
 
-### *7. $J_1$-$J_2$ Heisenberg chain*
-Spin-$1/2$ $J_1$-$J_2$ Heisenberg chain
+### *8. Hubbard on the square lattice*
+Hubbard model on a 2D lattice further has lattice point-group symmetries beyond translations. When $L_x=L_y=L$, the square torus has the full square-lattice point group
+$$
+    D_4 = C_4 \rtimes \{I, M_x\}.
+$$
+A convenient site-centered convention is
+$$
+    C_4:(x,y)\mapsto(-y,x),
+    \quad
+    M_x:(x,y)\mapsto(x,-y),
+$$
+with all coordinates understood modulo $L$. For operator canonicalization these point-group symmetries act by permuting lattice sites,
+$$
+    R^{-1}c_{(x,y),\sigma}R=c_{R(x,y),\sigma},
+    \quad
+    R^{-1}\gamma^a_{(x,y),\sigma}R=\gamma^a_{R(x,y),\sigma}.
+$$
+Therefore for a point-group symmetric state, the moments should obey
+$$
+    \langle\Gamma\rangle
+    =\left\langle R^{-1}\Gamma R\right\rangle,
+    \quad R\in D_4.
+$$
+
+Point-group operations also act on momentum labels $R: k\mapsto Rk$ and connect momentum PSD blocks. To use this relation, the active PSD basis must be closed under the point-group action. More explicitly, for a Fourier basis operator
+$$
+    \mathcal{O}_a(k)=\frac{1}{\sqrt{L_xL_y}}\sum_r e^{-ik\cdot r} T^{-1}_r \mathcal{O}_a T_r,
+$$
+one needs the point-group image of every representative to remain in the same active basis up to a translation and a normal-ordering sign,
+$$
+    R^{-1} \mathcal{O}_a R = \xi_a(R)\,T^{-1}_{\delta_a(R)}\,\mathcal{O}_{\pi_R(a)}\,T_{\delta_a(R)}.
+$$
+Because $R^{-1}c_{r,\sigma}R=c_{R(r),\sigma}$ and $R^{-1}c_{(0,0),\sigma}R=c_{(0,0),\sigma}$ by convention, we have
+$$
+    R^{-1} c_{r,\sigma} R = R^{-1} T^{-1}_r\, c_{(0,0),\sigma}\, T_r R
+    = \underbrace{R^{-1} T^{-1}_r R}_{T^{-1}_{R(r)}}\, c_{(0,0),\sigma}\, \underbrace{R^{-1} T_r R}_{T_{R(r)}}.
+$$
+Then
 $$
 \begin{aligned}
-    H &= J_1 \sum_i \mathbf{S}_i \cdot \mathbf{S}_{i+1} + J_2 \sum_i \mathbf{S}_i \cdot \mathbf{S}_{i+2}\\[5pt]
-    &= J_1/4 \sum_{i,a} \sigma^a_i \sigma^a_{i+1} + J_2/4 \sum_{i,a} \sigma^a_i \sigma^a_{i+2}.
+    R^{-1}\mathcal{O}_a(k)R
+    &= \frac{1}{\sqrt{L_xL_y}} \sum_r e^{-ik\cdot r} R^{-1} T^{-1}_r \mathcal{O}_a T_r R\\[5pt]
+    &= \frac{1}{\sqrt{L_xL_y}} \sum_r e^{-ik\cdot r} T^{-1}_{R(r)} R^{-1} \mathcal{O}_a R T_{R(r)}\\[5pt]
+    &= \frac{1}{\sqrt{L_xL_y}} \xi_a(R) \sum_r e^{-ik\cdot r} T^{-1}_{R(r)+\delta_a(R)} \mathcal{O}_{\pi_R(a)} T_{R(r)+\delta_a(R)}.
 \end{aligned}
 $$
-Let $\alpha=J_2/J_1$ in the antiferromagnetic frustrated regime $J_1>0$, $J_2\geq0$. The thermodynamic phase diagram is
-* $0\leq\alpha<\alpha_c$: gapless Luttinger liquid connected to the nearest-neighbor Heisenberg chain at $\alpha=0$.
-* $\alpha_c\simeq0.241167$: Berezinskii-Kosterlitz-Thouless transition.
-* $\alpha>\alpha_c$: gapped dimerized phase with two symmetry-related dimer patterns.
-* $\alpha=1/2$: Majumdar-Ghosh point, where the two nearest-neighbor singlet dimer coverings are exact ground states.
-* At larger $\alpha$, the system remains dimerized but spin correlations become increasingly incommensurate.
-
-Although the dimerized phase spontaneously breaks one-site translation in a pure thermodynamic ground state, the Hamiltonian remains one-site translation invariant. For energy-density bootstrap bounds, one can still restrict to a one-site translation-invariant density matrix: the symmetric mixture of the two dimerized ground states has the same energy. However, this forces the one-point dimer order parameter
+Define $r'=R(r)+\delta_a(R)$, and notice
 $$
-    \left\langle
-    \mathbf{S}_i\cdot\mathbf{S}_{i+1}
-    - \mathbf{S}_{i+1}\cdot\mathbf{S}_{i+2}
-    \right\rangle
+    e^{-ik\cdot r} = e^{-ik\cdot R^{-1}[r']} e^{ik\cdot R^{-1}[\delta_a(R)]}
+    = e^{-i(Rk)\cdot r'} e^{i(Rk)\cdot \delta_a(R)}.
 $$
-to vanish. Dimerization should instead be diagnosed either with a two-site unit cell or with translation-invariant dimer-dimer correlations. Similar arguments apply for $SO(3)$ symmetry and many others.
-
-#### *7.1. $SO(3)$ symmetry*
-The isotropic Heisenberg chain has full spin-rotation symmetry. On states this is implemented by $SU(2)$, while on Pauli-vector operators it descends to $SO(3)$. We use the $SO(3)$ language below because the SDP moments are built from Pauli strings. In principle, one can use the full non-abelian $SO(3)$ symmetry to reduce PSD matrices. The operator basis at fixed momentum carries a representation of $SO(3)$,
-$$
-    \mathcal{U}(R)^\dag \mathcal{O}_a(k) \mathcal{U}(R)=\sum_b D_{ba}(R)\mathcal{O}_b(k).
-$$
-For an $SO(3)$-invariant density matrix, the moment matrix must commute with this representation. After rotating the Pauli-string basis into irreducible tensor sectors,
-$$
-    \mathcal{S}(k)\simeq\bigoplus_\ell\left(V_\ell\otimes\mathbb{C}^{m_\ell}\right),
-$$
-Schur's lemma gives
-$$
-    M(k)=\bigoplus_\ell\left(I_{2\ell+1}\otimes A_\ell(k)\right),\quad A_\ell(k)\succeq0.
-$$
-This would be the clean full-$SO(3)$ PSD block decomposition. We do not start with it because Pauli strings are not irreducible tensor operators; constructing this basis requires Clebsch-Gordan-like linear combinations and would complicate the prototype.
-
-The practical plan is therefore twofold. First, use an abelian subgroup of the $SO(3)$ action to reduce PSD blocks. The convenient choice is the proper $\pi$-rotation subgroup
-$$
-    C_2\times C_2=\{1, R_{xy}, R_{yz}, R_{zx}\},
-$$
-where
+This finally leads to
 $$
 \begin{aligned}
-    &R_{xy}: \mathcal{O}\mapsto (-1)^{N_X+N_Y}\mathcal{O},\\[5pt]
-    &R_{yz}: \mathcal{O}\mapsto (-1)^{N_Y+N_Z}\mathcal{O},\\[5pt]
-    &R_{zx}: \mathcal{O}\mapsto (-1)^{N_Z+N_X}\mathcal{O}.
+    R^{-1}\mathcal{O}_a(k)R
+    &= \frac{1}{\sqrt{L_xL_y}} \xi_a(R) e^{i(Rk)\cdot \delta_a(R)} \sum_{r'} e^{-i(Rk)\cdot r'}  T^{-1}_{r'} \mathcal{O}_{\pi_R(a)} T_{r'}\\[5pt]
+    &= \xi_a(R)\, e^{i(Rk)\cdot \delta_a(R)}\, \mathcal{O}_{\pi_R(a)}(Rk),
 \end{aligned}
 $$
-Here $N_X,N_Y,N_Z$ count the Pauli labels in the normal-form monomial $\mathcal{O}$. Since Pauli strings are eigenoperators of this abelian subgroup, if the density matrix is invariant under this subgroup, any monomial odd under one of these rotations has zero expectation value. Hence a necessary condition for a nonzero moment is
+so the PSD blocks satisfy a unitary equivalence
 $$
-    N_X = N_Y = N_Z \pmod 2.
+    M(k)=U_R(k)^\dag\, M(Rk)\,U_R(k).
 $$
+Hence pruning momentum blocks by $D_4$ orbits is only safe after the basis-closure under lattice point-group symmetry is guaranteed. In the current prototype, lattice point-group symmetry is used only for moment variable canonicalization.
 
-The same $C_2\times C_2$ charge can further block diagonalize each momentum PSD block. If $O_a(-k)$ and $O_b(k)$ carry different $\pi$-rotation charges, then $\langle O_a(k)^\dag O_b(k)\rangle=0$. Thus
+At high-symmetry momenta with nontrivial little group
 $$
-    M(k)=\bigoplus_q M_q(k),\quad q\in C_2\times C_2.
+    G_k=\{R\in D_4: Rk=k\},
 $$
+the same relation becomes an internal symmetry of a single block, $M(k)=U_R(k)^\dag M(k)U_R(k)$. After rotating the PSD basis into irreducible representations of $G_k$, one could further block diagonalize $M(k)$. We do not implement this additional little-group PSD blocking either.
 
-Second, we impose the full continuous $SO(3)$ symmetry as affine Ward identities,
+When $L_x\neq L_y$, the symmetry is reduced to
 $$
-    \left\langle [S^a_{\mathrm{tot}},\mathcal{O}]\right\rangle=0,\quad a=x,y,z.
+    D_2 = C_2 \times \{I,M_x\},
 $$
-Thus the abelian subgroup gives an immediate PSD-size reduction in the original Pauli-string basis, while the full non-abelian $SO(3)$ still contributes useful linear constraints without requiring an irrep rotation.
+with
+$$
+    C_2:(x,y)\mapsto(-x,-y),
+    \quad
+    M_x:(x,y)\mapsto(x,-y).
+$$
+These operations can be used in the same way for variable canonicalization.
 
-#### *7.2. Sign symmetry*
-Single-axis substitutions such as
-$$
-    F_x: (X,Y,Z) \mapsto (-X,Y,Z)
-$$
-are not $SO(3)$ rotations, but the Heisenberg Hamiltonian is still invariant under them. Together with $F_y$ and $F_z$, they form a sign-flip group
-$$
-    C_2^3 = \{(s_x,s_y,s_z):s_a=\pm1\}
-$$
-acting on Pauli labels by $\sigma^a\mapsto s_a\sigma^a$. The aforementioned proper $\pi$-rotations are the determinant +1 subgroup of this larger group. Hence the sign symmetries set a moment to zero whenever its normal form is odd under at least one $F_a$. In particular, a nonzero normal-form moment must have
-$$
-    N_X = N_Y = N_Z = 0 \pmod 2.
-$$
-
-This larger $C_2^3$ is useful for eliminating moment variables, but it does not produce eight independent PSD blocks. A PSD entry contains a product $\mathcal{O}_a^\dag \mathcal{O}_b$. It can be nonzero only if this product is even under all three flips. Therefore two basis operators can couple whenever their parity labels are equal up to the common flip 111:
-$$
-    p(\mathcal{O}_a) = p(\mathcal{O}_b)
-    \quad\text{or}\quad
-    p(\mathcal{O}_a) = p(\mathcal{O}_b) + 111.
-$$
-For instance,
-$$
-    \underbrace{(X_i)}_{100} \underbrace{(Y_iZ_j)}_{011} = \underbrace{iZ_iZ_j}_{000},
-$$
-so the sectors $100$ and $011$ are connected rather than separated. Thus the eight raw $C_2^3$ labels pair into exactly four PSD blocks,
-$$
-    000/111:(+,+),\quad
-    100/011:(-,+),\quad
-    010/101:(-,-),\quad
-    001/110:(+,-).
-$$
-In the brackets, we label the $C_2\times C_2$ charge by the two independent $\pi$-rotation signs
-$$
-    (q_{xy}, q_{yz}) = \left((-1)^{N_X+N_Y},(-1)^{N_Y+N_Z}\right).
-$$
-In short, the $C_2\times C_2$ quotient gives the PSD block labels, while the full $C_2^3$ sign symmetry gives additional zero-moment rules.
-
-#### *7.3. Permutation*
-For every permutation $\tau\in S_3$ of the spin labels $x,y,z$,
-$$
-    \langle \mathcal{O}\rangle = \left\langle \tau(\mathcal{O})\right\rangle.
-$$
-Bare $S_3$ permutations are not literally a subgroup of $SO(3)$: odd permutations have determinant -1.
-
-#### *7.4. Other positivity constraints (not implemented)*
-The SDP bound shall be improved by adding an extra positivity constraint on a local $k$-body reduced density matrix,
-$$
-    \rho_{[k]}
-    =\frac{1}{2^k}\sum_{a_1,\ldots,a_k}
-    \left\langle \sigma_1^{a_1}\sigma_2^{a_2}\cdots\sigma_k^{a_k}\right\rangle
-    \sigma_1^{a_1}\sigma_2^{a_2}\cdots\sigma_k^{a_k}
-    \succeq 0,
-$$
-where $a_i\in\{0,x,y,z\}$ and $\sigma_i^0=\mathbf 1$. The cost is that $\rho_{[k]}$ is a $2^k\times 2^k$ PSD matrix. And this is only useful if the $k$-site local algebra is not already contained in the moment-matrix basis. In our NGA setting, the active basis is grown from Hamiltonian descendants and need not contain all moments appearing in $\rho_{[k]}$; adding this constraint would therefore require adding those local RDM moments as required variables, or treating it as a separate fixed-basis enhancement.
-
-Refs:
-* https://arxiv.org/pdf/2310.05844, main benchmark on Heisenberg chain.
-
-    > For $J_2\leq J_1$, they use sparse monomials of the schematic form
-    > $$
-    >     1,
-    >     \quad \sigma_i^a,
-    >     \quad \sigma_i^a\sigma_{i+j}^b,
-    >     \quad \sigma_i^a\sigma_{i+1}^b\sigma_{i+2}^c,
-    >     \quad \sigma_i^a\sigma_{i+1}^b\sigma_{i+2}^c\sigma_{i+3}^d,
-    > $$
-    > where $j$ is restricted to a finite range and $a,b,c,d\in\{x,y,z\}$. For $J_2>J_1$, they adapt the three-body sector to the next-nearest-neighbor structure, using monomials such as
-    > $$
-    >     \sigma_i^a\sigma_{i+2}^b\sigma_{i+4}^c.
-    > $$
-    > This sparse basis is more targeted than a full degree-truncated Pauli basis.
-
-### *8. Certified observable bounds*
+### *9. Certified observable bounds*
 The observable expectation value directly read from an energy bootstrap solution is generally not certified. Suppose the energy SDP is solved as
 $$
 \begin{aligned}

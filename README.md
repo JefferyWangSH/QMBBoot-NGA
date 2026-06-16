@@ -1,6 +1,6 @@
 # QMBBoot-NGA
 * *Nullspace-guided adaptive algorithm of quantum many-body bootstrap (QMBBoot-NGA).*
-* Support computing lower bounds of ground-state energy density and certified lower/upper bounds of observables for finite lattice chains.
+* Support computing lower bounds of ground-state energy density and certified lower/upper bounds of observables for PBC lattice models.
 * Utilize symmetries to
   * expose block structure in PSD moment matrices,
   * prune SDP optimization variables,
@@ -13,10 +13,11 @@ Implemented:
 * *Transverse/Longitudinal-field Ising chain*
 * *$J_1$-$J_2$ Heisenberg chain*
 * *Hubbard chain*
+* *Hubbard on square/rectangular lattice*
 
-All three model compilers use:
+All these model compilers use:
 * lattice translation symmetry to generate momentum PSD blocks
-* lattice inversion to prune SDP variables
+* lattice point-group symmetries to prune SDP variables, e.g. inversion in 1D and $D_4$/$D_2$ for square/rectangular lattices
 * complex conjugation $\mathcal{K}$-symmetry to prune $\mathcal{K}$-odd SDP variables and identify equivalent $k$ and $-k$ momentum PSD blocks
 
 Additional model-specific symmetries:
@@ -24,7 +25,7 @@ Additional model-specific symmetries:
   * spin label permutation $S_3$ to prune SDP variables
   * spin rotation $SO(3)$ via Ward identities
   * $\pi$-rotation spin subgroup $D_2=C_2\times C_2$ to further split PSD blocks
-* *Hubbard chain*
+* *Hubbard in 1D and 2D*
   * spin-resolved fermion parity $P_\uparrow\times P_\downarrow$ to further split PSD blocks
   * charge symmetry $U(1)$ via Ward identities; fixed total filling number
   * spin rotation $SU(2)$ via Ward identities

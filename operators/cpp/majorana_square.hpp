@@ -306,18 +306,56 @@ class MajoranaMonomialSquare {
             return stabilizer;
         }
 
-        std::pair<MajoranaMonomialSquare, int> invert() const {
+        std::pair<MajoranaMonomialSquare, int> lattice_c4_rotate(int quarters) const {
+            int q = quarters % 4;
+            if (q < 0) {
+                q += 4;
+            }
+            if constexpr (Lx != Ly) {
+                if (q & 1) {
+                    throw std::invalid_argument("odd lattice C4 rotation requires Lx == Ly");
+                }
+            }
+            if (q == 0) {
+                return {*this, 1};
+            }
+
+            return map_modes([&](std::size_t mode) {
+                const auto site = mode / 4;
+                const auto rem = mode % 4;
+                const auto x = site % Lx;
+                const auto y = site / Lx;
+
+                std::size_t new_x = x;
+                std::size_t new_y = y;
+                if (q == 1) {
+                    new_x = (Lx - y) % Lx;
+                    new_y = x;
+                } else if (q == 2) {
+                    new_x = (Lx - x) % Lx;
+                    new_y = (Ly - y) % Ly;
+                } else {
+                    new_x = y;
+                    new_y = (Ly - x) % Ly;
+                }
+
+                const auto new_site = new_x + Lx * new_y;
+                return std::pair{4 * new_site + rem, 1};
+            });
+        }
+
+        std::pair<MajoranaMonomialSquare, int> lattice_reflect_x() const {
             return map_modes([](std::size_t mode) {
                 const auto site = mode / 4;
                 const auto rem = mode % 4;
                 const auto x = site % Lx;
                 const auto y = site / Lx;
-                const auto new_site = ((Lx - x) % Lx) + Lx * ((Ly - y) % Ly);
+                const auto new_site = x + Lx * ((Ly - y) % Ly);
                 return std::pair{4 * new_site + rem, 1};
             });
         }
 
-        std::pair<MajoranaMonomialSquare, int> majorana_c4_rotate(int up_quarters = 0, int dn_quarters = 0) const {
+        std::pair<MajoranaMonomialSquare, int> majorana_c4_rotate(int up_quarters, int dn_quarters) const {
             static constexpr std::pair<std::size_t, int> c4_rot[4][2] = {
                 {{0, +1}, {1, +1}},
                 {{1, +1}, {0, -1}},

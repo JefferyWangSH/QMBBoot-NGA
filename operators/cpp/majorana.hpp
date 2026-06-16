@@ -291,7 +291,7 @@ class MajoranaMonomial {
             });
         }
 
-        std::pair<MajoranaMonomial, int> c4_rotate(int up_quarters = 0, int dn_quarters = 0) const {
+        std::pair<MajoranaMonomial, int> c4_rotate(int up_quarters, int dn_quarters) const {
             static constexpr std::pair<std::size_t, int> c4_rot[4][2] = {
                 {{0, +1}, {1, +1}},
                 {{1, +1}, {0, -1}},

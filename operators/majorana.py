@@ -168,7 +168,7 @@ class MajoranaMonomial:
         monomial = MajoranaMonomial(L=self.L, mask=mask)
         return monomial, (-1 if swaps & 1 else 1)
 
-    def c4_rotate(self, up_quarters: int = 0, dn_quarters: int = 0):
+    def c4_rotate(self, up_quarters: int, dn_quarters: int):
         '''
             spin-resolved pi/2 rotations in the Majorana planes
         '''

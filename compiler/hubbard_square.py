@@ -260,26 +260,31 @@ class HubbardSquareCompiler:
 
         cands = []
         for up_quarters, dn_quarters in itertools.product(range(4), repeat=2):
-            rotated, rot_sign = monomial.majorana_c4_rotate(up_quarters, dn_quarters)
+            majorana_rotated, majorana_rot_sign = monomial.majorana_c4_rotate(up_quarters, dn_quarters)
 
             for exchange in (False, True):
-                exchanged = rotated
-                exchange_sign = rot_sign
+                exchanged = majorana_rotated
+                exchange_sign = majorana_rot_sign
                 if exchange:
-                    exchanged, step_sign = rotated.spin_exchange()
+                    exchanged, step_sign = majorana_rotated.spin_exchange()
                     exchange_sign *= step_sign
 
-                for invert in (False, True):
-                    cand = exchanged
-                    cand_sign = exchange_sign
-                    if invert:
-                        cand, step_sign = exchanged.invert()
-                        cand_sign *= step_sign
+                lattice_quarters = range(4) if self.Lx == self.Ly else (0, 2)
+                for quarters in lattice_quarters:
+                    lattice_rotated, lattice_rot_sign = exchanged.lattice_c4_rotate(quarters)
+                    lattice_rot_sign *= exchange_sign
 
-                    cands.append((
-                        cand.trans_canon,
-                        cand_sign * cand.trans_canon_sign,
-                    ))
+                    for reflect in (False, True):
+                        cand = lattice_rotated
+                        cand_sign = lattice_rot_sign
+                        if reflect:
+                            cand, step_sign = lattice_rotated.lattice_reflect_x()
+                            cand_sign *= step_sign
+
+                        cands.append((
+                            cand.trans_canon,
+                            cand_sign * cand.trans_canon_sign,
+                        ))
 
         canon_key = min(cand_key for cand_key, _ in cands)
         signs = {cand_sign for cand_key, cand_sign in cands if cand_key == canon_key}
@@ -340,7 +345,8 @@ class HubbardSquareCompiler:
         self.block_momenta = []
         for nx in range(self.Lx):
             for ny in range(self.Ly):
-                # complex conjugation or inversion makes k and -k equivalent
+                # complex-conjugation K symmetry makes k and -k equivalent
+                # up to complex conjugation and a unitary transformation
                 if (nx, ny) > ((-nx) % self.Lx, (-ny) % self.Ly):
                     continue
 
@@ -784,6 +790,54 @@ class HubbardSquareCompiler:
             e_ub=self.e_ub,
             obs_ops=self.obs_ops,
         )
+
+
+'''
+    basis_reprs helper
+
+    generates translation representatives from local rectangular windows.
+    the windows define the locality hierarchy; point-group symmetries are not quotiented here.
+'''
+def build_basis_reprs(
+    Lx: int,
+    Ly: int,
+    max_degree: int,
+    max_support: int,
+    windows: list[tuple[int, int]],
+):
+    n_sites = Lx * Ly
+    if max_degree < 0 or max_degree > 4 * n_sites:
+        raise ValueError('max_degree must be between 0 and 4*Lx*Ly')
+    if max_support < 0 or max_support > n_sites:
+        raise ValueError('max_support must be between 0 and Lx*Ly')
+
+    parsed_windows = []
+    for window in windows:
+        if len(window) != 2:
+            raise ValueError('each window must be a pair [wx, wy]')
+        wx, wy = window
+        if wx <= 0 or wx > Lx or wy <= 0 or wy > Ly:
+            raise ValueError('window sizes must satisfy 1 <= wx <= Lx and 1 <= wy <= Ly')
+        parsed_windows.append((wx, wy))
+    parsed_windows = sorted(set(parsed_windows))
+
+    identity = MajoranaMonomialSquare.identity(Lx, Ly)
+    reps = {identity.trans_canon: identity}
+    local_masks = tuple(range(1, 1 << 4))
+
+    for wx, wy in parsed_windows:
+        window_sites = tuple(x + Lx * y for y in range(wy) for x in range(wx))
+        max_sites = min(max_support, max_degree, len(window_sites))
+        for support in range(1, max_sites + 1):
+            for sites in itertools.combinations(window_sites, support):
+                for masks in itertools.product(local_masks, repeat=support):
+                    if sum(mask.bit_count() for mask in masks) > max_degree:
+                        continue
+                    raw_mask = sum(local_mask << (4 * site) for site, local_mask in zip(sites, masks))
+                    monomial = MajoranaMonomialSquare(Lx, Ly, raw_mask).trans_canon_rep
+                    reps.setdefault(monomial.trans_canon, monomial)
+
+    return [reps[key] for key in sorted(reps)]
 
 
 if __name__ == '__main__':
