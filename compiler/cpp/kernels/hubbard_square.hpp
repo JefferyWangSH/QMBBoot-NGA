@@ -15,6 +15,13 @@ template <std::size_t Lx, std::size_t Ly>
 inline std::optional<std::pair<MajoranaMonomialSquare<Lx, Ly>, int>> sym_canon(
     const MajoranaMonomialSquare<Lx, Ly>& monomial
 ) {
+    for (const auto& [shift, trans_sign] : monomial.trans_stabilizer()) {
+        (void)shift;
+        if (trans_sign == -1) {
+            return std::nullopt;
+        }
+    }
+
     bool initialized = false;
     bool sign_conflict = false;
     MajoranaMonomialSquare<Lx, Ly> canon = MajoranaMonomialSquare<Lx, Ly>::identity();

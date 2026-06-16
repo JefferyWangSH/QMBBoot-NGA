@@ -2,7 +2,8 @@
 <%
 setup_pybind11(cfg)
 cfg['compiler_args'] = ['-std=c++20', '-O3']
-cfg['include_dirs'] = ['@REPO_ROOT@']
+cfg.setdefault('include_dirs', [])
+cfg['include_dirs'].append('@REPO_ROOT@')
 %>
 */
 

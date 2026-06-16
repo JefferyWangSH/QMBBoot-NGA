@@ -132,8 +132,13 @@ class HubbardCompiler:
         e_ub: float = None,
         obs_ops: dict | None = None,
     ):
-        self.L = params.L
+        if params.L <= 0:
+            raise ValueError('L must be positive')
+        if params.n_particles is not None and not (0 <= params.n_particles <= 2 * params.L):
+            raise ValueError('n_particles must be between 0 and 2L')
+
         self.params = params
+        self.L = params.L
         self.n_particles = params.n_particles
         self.ward_ops = {'hamil': 0, 'Nu': 0, 'Nd': 0, 'S+': 0}
 

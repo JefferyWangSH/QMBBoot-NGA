@@ -258,6 +258,10 @@ class HubbardSquareCompiler:
                 return canon
             return canon[0]
 
+        if any(trans_sign == -1 for _, trans_sign in monomial.trans_stabilizer()):
+            self._sym_canon_cache[monomial.mask] = None
+            return None
+
         cands = []
         for up_quarters, dn_quarters in itertools.product(range(4), repeat=2):
             majorana_rotated, majorana_rot_sign = monomial.majorana_c4_rotate(up_quarters, dn_quarters)

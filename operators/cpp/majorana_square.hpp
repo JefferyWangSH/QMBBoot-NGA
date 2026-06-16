@@ -294,6 +294,7 @@ class MajoranaMonomialSquare {
             std::vector<std::pair<std::array<std::size_t, 2>, int>> stabilizer;
             for (std::size_t shift_y = 0; shift_y < Ly; ++shift_y) {
                 for (std::size_t shift_x = 0; shift_x < Lx; ++shift_x) {
+                    // nontrivial translation stabilizers only; identity/full-period shifts are omitted.
                     if (shift_x == 0 && shift_y == 0) {
                         continue;
                     }
