@@ -19,7 +19,8 @@
     "initial": {
       "max_degree": 4,
       "max_support": 1,
-      "max_diameter": 0
+      "max_diameter": 0,
+      "parity_sector": null
     },
     "required": [
       "I",

@@ -873,49 +873,60 @@ class HubbardCompiler:
     for each majorana monomial,
         1) max_degree restricts the max number of majorana operator;
         2) max_support restricts the max number of lattice sites involved;
-        3) max_diameter restricts the max distance of any two majorana operators.
+        3) max_diameter restricts the max distance of any two majorana operators;
+        4) parity_sector, when provided, keeps only monomials with the given
+           spin-resolved fermion parity (N_up mod 2, N_down mod 2).
 '''
-def build_basis_reprs(L: int, max_degree: int, max_support: int, max_diameter: int):
+def build_basis_reprs(
+    L: int,
+    max_degree: int,
+    max_support: int,
+    max_diameter: int,
+    parity_sector: tuple[int, int] | None = None,
+):
     if max_degree < 0 or max_degree > 4 * L:
         raise ValueError('max_degree must be between 0 and 4L')
     if max_support < 0 or max_support > L:
         raise ValueError('max_support must be between 0 and L')
     if max_diameter < 0 or max_diameter > L // 2:
-        raise ValueError('max_diameter must be between 0 and L//2')
+        raise ValueError('max_diameter must be between 0 and ⌊L/2⌋')
+    if parity_sector is not None:
+        parity_sector = tuple(parity_sector)
+        if parity_sector not in ((0, 0), (0, 1), (1, 0), (1, 1)):
+            raise ValueError('parity_sector must be one of (0, 0), (0, 1), (1, 0), (1, 1)')
 
-    def site_diameter(sites: tuple[int, ...]) -> int:
-        diam = 0
-        for i, site1 in enumerate(sites):
-            for site2 in sites[i+1:]:
-                dist = abs(site1 - site2)
-                diam = max(diam, min(dist, L-dist))
-        return diam
+    reps = {}
+    identity = MajoranaMonomial.identity(L=L)
+    if parity_sector is None or identity.fermion_parity(spin=True) == parity_sector:
+        reps[identity.trans_canon] = identity.trans_canon_rep
 
-    def shifted_mask(sites: tuple[int, ...], masks: tuple[int, ...], anchor: int) -> int:
-        shift = sites[anchor]
-        return sum(
-            local_mask << (4 * ((site - shift) % L))
-            for site, local_mask in zip(sites, masks)
-        )
-
-    reps = [MajoranaMonomial.identity(L=L)]
     local_masks = tuple(range(1, 1 << 4))
     max_sites = min(max_support, max_degree, L)
 
     for support in range(1, max_sites + 1):
         for sites_tail in itertools.combinations(range(1, L), support - 1):
             sites = (0, *sites_tail)
-            if site_diameter(sites) > max_diameter:
+            diameter = 0
+            for i, site1 in enumerate(sites):
+                for site2 in sites[i+1:]:
+                    dist = abs(site1 - site2)
+                    diameter = max(diameter, min(dist, L - dist))
+            if diameter > max_diameter:
                 continue
 
             for masks in itertools.product(local_masks, repeat=support):
                 if sum(mask.bit_count() for mask in masks) > max_degree:
                     continue
-                mask = shifted_mask(sites, masks, anchor=0)
-                if mask != min(shifted_mask(sites, masks, anchor) for anchor in range(support)):
+                mask = sum(
+                    local_mask << (4 * site)
+                    for site, local_mask in zip(sites, masks)
+                )
+                cand = MajoranaMonomial(L=L, mask=mask)
+                if parity_sector is not None and cand.fermion_parity(spin=True) != parity_sector:
                     continue
-                reps.append(MajoranaMonomial(L=L, mask=mask))
-    return reps
+                reps.setdefault(cand.trans_canon, cand.trans_canon_rep)
+
+    return [reps[key] for key in sorted(reps)]
 
 
 if __name__ == '__main__':

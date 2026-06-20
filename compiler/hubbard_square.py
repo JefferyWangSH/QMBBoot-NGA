@@ -20,6 +20,7 @@ else:
 
 _CACHE_MAX_SIZE = 10_000_000
 
+
 @dataclass(slots=True)
 class HubbardSquareParams:
     Lx: int = 4
@@ -808,12 +809,17 @@ def build_basis_reprs(
     max_degree: int,
     max_support: int,
     windows: list[tuple[int, int]],
+    parity_sector: tuple[int, int] | None = None,
 ):
     n_sites = Lx * Ly
     if max_degree < 0 or max_degree > 4 * n_sites:
         raise ValueError('max_degree must be between 0 and 4*Lx*Ly')
     if max_support < 0 or max_support > n_sites:
         raise ValueError('max_support must be between 0 and Lx*Ly')
+    if parity_sector is not None:
+        parity_sector = tuple(parity_sector)
+        if parity_sector not in ((0, 0), (0, 1), (1, 0), (1, 1)):
+            raise ValueError('parity_sector must be one of (0, 0), (0, 1), (1, 0), (1, 1)')
 
     parsed_windows = []
     for window in windows:
@@ -825,10 +831,12 @@ def build_basis_reprs(
         parsed_windows.append((wx, wy))
     parsed_windows = sorted(set(parsed_windows))
 
+    reps = {}
     identity = MajoranaMonomialSquare.identity(Lx, Ly)
-    reps = {identity.trans_canon: identity}
-    local_masks = tuple(range(1, 1 << 4))
+    if parity_sector is None or identity.fermion_parity(spin=True) == parity_sector:
+        reps[identity.trans_canon] = identity.trans_canon_rep
 
+    local_masks = tuple(range(1, 1 << 4))
     for wx, wy in parsed_windows:
         window_sites = tuple(x + Lx * y for y in range(wy) for x in range(wx))
         max_sites = min(max_support, max_degree, len(window_sites))
@@ -838,8 +846,10 @@ def build_basis_reprs(
                     if sum(mask.bit_count() for mask in masks) > max_degree:
                         continue
                     raw_mask = sum(local_mask << (4 * site) for site, local_mask in zip(sites, masks))
-                    monomial = MajoranaMonomialSquare(Lx, Ly, raw_mask).trans_canon_rep
-                    reps.setdefault(monomial.trans_canon, monomial)
+                    cand = MajoranaMonomialSquare(Lx, Ly, raw_mask)
+                    if parity_sector is not None and cand.fermion_parity(spin=True) != parity_sector:
+                        continue
+                    reps.setdefault(cand.trans_canon, cand.trans_canon_rep)
 
     return [reps[key] for key in sorted(reps)]
 

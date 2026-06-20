@@ -236,9 +236,15 @@ class ModelAdapter:
                 basis = list(basis_map.values())
         else:
             basis = build_initial_basis(basis_config['initial'])
+            # merge required basis into initial basis by default
+            basis_map = {rep.trans_canon: rep.trans_canon_rep for rep in basis}
+            for rep in required_basis:
+                basis_map[rep.trans_canon] = rep.trans_canon_rep
+            basis = list(basis_map.values())
+
             start_step, records = 0, []
             events = {
-                'initial_basis': [str(rep.trans_canon_rep) for rep in basis],
+                'initial_basis': [str(rep) for rep in basis],
                 'steps': [],
             }
             drop_counts = {}
