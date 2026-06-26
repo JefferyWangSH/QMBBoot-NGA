@@ -45,6 +45,7 @@ def assert_same_monomial(cpp_m, py_m):
     assert cpp_m.k_parity() == py_m.k_parity()
     assert cpp_m.k_parity(hermitian=True) == py_m.k_parity(hermitian=True)
     assert cpp_m.k_parity(hermitian=False) == py_m.k_parity(hermitian=False)
+    assert cpp_m.ph_parity() == py_m.ph_parity()
 
 def assert_same_operator(cpp_op, py_op):
     assert cpp_op.L == py_op.L

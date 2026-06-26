@@ -6,7 +6,7 @@
   * prune SDP optimization variables,
   * and impose Ward-identity constraints.
 * Use [CVXPY](https://github.com/cvxpy/cvxpy) for solving SDPs.
-* Build PSD blocks as vectorized sparse affine maps and affine constraints as a sparse matrix.
+* Build PSD blocks as vectorized sparse affine maps and build affine constraints as a sparse matrix.
 
 ## Models
 Implemented:
@@ -23,14 +23,17 @@ All these model compilers use:
 Additional model-specific symmetries:
 * *$J_1$-$J_2$ Heisenberg chain*
   * spin label permutation $S_3$ to prune SDP variables
-  * spin rotation $SO(3)$ via Ward identities
+  * spin rotation $SO(3)$ to generate Ward identities
   * $\pi$-rotation spin subgroup $D_2=C_2\times C_2$ to further split PSD blocks
 * *Hubbard in 1D and 2D*
   * spin-resolved fermion parity $P_\uparrow\times P_\downarrow$ to further split PSD blocks
-  * charge symmetry $U(1)$ via Ward identities; fixed total filling number
-  * spin rotation $SU(2)$ via Ward identities
+  * charge symmetry $U(1)$ to generate Ward identities; fixed total filling number
+  * spin rotation $SU(2)$ to generate Ward identities
   * spin-resolved $\pi/2$ rotations $C_{4,\uparrow}\times C_{4,\downarrow}$ in the Majorana planes, i.e. a finite Abelian subgroup of $U_\uparrow(1)\times U_\downarrow(1)$, to prune SDP variables
   * spin exchange to prune SDP variables
+  * additional symmetries at half-filling on bipartite lattices:
+    * particle-hole symmetry to reduce SDP variables and PSD constraints
+    * $\eta$-pairing $SU(2)_\eta$ to generate Ward identities
 
 ## Dependencies
 * Python >= 3.13

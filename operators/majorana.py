@@ -21,6 +21,24 @@ _SPIN_LADDER_TERMS = {
     ),
 }
 
+r'''
+    local Majorana-bilinear expansion of \eta^+_i and \eta^-_i excluding the staggered phase
+'''
+_ETA_LADDER_TERMS = {
+    '+': (
+        (0, 2, +.25),
+        (0, 3, -.25j),
+        (1, 2, -.25j),
+        (1, 3, -.25),
+    ),
+    '-': (
+        (0, 2, -.25),
+        (0, 3, -.25j),
+        (1, 2, -.25j),
+        (1, 3, +.25),
+    ),
+}
+
 '''
     spin-resolved pi/2 Majorana-plane rotations
 
@@ -310,6 +328,21 @@ class MajoranaMonomial:
         # patch from hermitianization
         if hermitian and self.dag_phase() == -1:
             cnt += 1
+        return cnt % 2
+
+    def ph_parity(self):
+        '''
+            particle-hole parity with epsilon_i = (-1)^i.
+        '''
+        cnt = 0
+        support = self.mask
+        while support:
+            bit = support & -support
+            mode = bit.bit_length() - 1
+            site, rem = divmod(mode, 4)
+            pm = rem % 2
+            cnt += site + pm
+            support ^= bit
         return cnt % 2
 
     def __str__(self):

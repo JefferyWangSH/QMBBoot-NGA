@@ -226,6 +226,25 @@ class MajoranaMonomialSquare {
             return count & 1;
         }
 
+        int ph_parity() const {
+            int count = 0;
+            for (std::size_t word_idx = 0; word_idx < n_words; ++word_idx) {
+                auto word = m_words[word_idx];
+                while (word != 0) {
+                    const auto bit = std::countr_zero(word);
+                    const auto mode = 64 * word_idx + bit;
+                    const auto site = mode / 4;
+                    const auto rem = mode % 4;
+                    const auto x = site % Lx;
+                    const auto y = site / Lx;
+                    const auto pm = rem % 2;
+                    count += static_cast<int>((x + y + pm) & 1);
+                    word &= word - 1;
+                }
+            }
+            return count & 1;
+        }
+
         // @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ physical/symmetry operations
         std::pair<MajoranaMonomialSquare, int> mul(const MajoranaMonomialSquare& other) const {
             int sign = 1;

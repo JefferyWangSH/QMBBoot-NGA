@@ -5,7 +5,7 @@ import os
 import numpy as np
 import scipy as sp
 
-from operators.majorana import MajoranaMonomial, MajoranaOperator, _SPIN_LADDER_TERMS
+from operators.majorana import MajoranaMonomial, MajoranaOperator, _SPIN_LADDER_TERMS, _ETA_LADDER_TERMS
 from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
 
 _USE_JIT = os.environ.get('USE_JIT', '1') != '0'
@@ -140,7 +140,12 @@ class HubbardCompiler:
         self.params = params
         self.L = params.L
         self.n_particles = params.n_particles
+
+        self.use_ph_sym = self.L % 2 == 0 and self.n_particles in (None, self.L)
+        self.use_eta_sym = self.use_ph_sym
         self.ward_ops = {'hamil': 0, 'Nu': 0, 'Nd': 0, 'S+': 0}
+        if self.use_eta_sym:
+            self.ward_ops['eta+'] = 0
 
         self.hamil_op = build_hamil(params)
 
@@ -266,7 +271,8 @@ class HubbardCompiler:
     def _sym_allowed(self, monomial: MajoranaMonomial) -> bool:
         '''
             quick symmetry filter for monomials that are symmetry eigenoperators;
-            SDP variables should have even fermion parity for each spin and even K parity.
+            SDP variables should have even fermion parity for each spin, even K parity,
+            and, at half filling on even L, even particle-hole parity.
         '''
         if not hasattr(self, '_sym_allowed_cache'):
             self._sym_allowed_cache = LRU(_CACHE_MAX_SIZE)
@@ -276,6 +282,7 @@ class HubbardCompiler:
         allowed = (
             monomial.fermion_parity(spin=True) == (0, 0)
             and monomial.k_parity(hermitian=True) == 0
+            and (not self.use_ph_sym or monomial.ph_parity() == 0)
         )
         self._sym_allowed_cache[monomial.mask] = allowed
         return allowed
@@ -327,16 +334,27 @@ class HubbardCompiler:
         self.block_reprs = []
         self.block_momenta = []
         for q in range(self.L//2 + 1):
-            parity_reprs = {}
+            f_parity_reprs = {}
             for monomial in self.basis_reprs:
                 if not self.nonzero_fourier(monomial, q):
                     continue
-                parity = monomial.fermion_parity(spin=True)
-                parity_reprs.setdefault(parity, []).append(monomial)
+                f_parity = monomial.fermion_parity(spin=True)
+                f_parity_reprs.setdefault(f_parity, []).append(monomial)
 
-            for parity in sorted(parity_reprs):
-                self.block_reprs.append(parity_reprs[parity])
-                self.block_momenta.append(q)
+            for f_parity in sorted(f_parity_reprs):
+                if self.use_ph_sym and f_parity in ((0, 1), (1, 0)) and q > self.L//4:
+                    continue
+                if self.use_ph_sym and f_parity in ((0, 0), (1, 1)):
+                    ph_parity_reprs = {}
+                    for monomial in f_parity_reprs[f_parity]:
+                        ph_parity = monomial.ph_parity()
+                        ph_parity_reprs.setdefault(ph_parity, []).append(monomial)
+                    for ph_parity in sorted(ph_parity_reprs):
+                        self.block_reprs.append(ph_parity_reprs[ph_parity])
+                        self.block_momenta.append(q)
+                else:
+                    self.block_reprs.append(f_parity_reprs[f_parity])
+                    self.block_momenta.append(q)
 
     def _build_psd(self):
         '''
@@ -667,6 +685,93 @@ class HubbardCompiler:
                     self.affines.add(expr)
                     self.ward_ops[f'S{spin}'] += 1
 
+    def _compile_eta_ward(self, monomial: MajoranaMonomial, axis: str) -> LinearExpr | None:
+        r'''
+            return [eta^a, O] as a compiled linear expression;
+            early return None if any nontrivial term is not representable by the current SDP variables.
+            axis: '+' or '-'
+        '''
+        assert axis in ('+', '-')
+        expr = {}
+        support = monomial.mask
+        while support:
+            bit = support & -support
+            site = (bit.bit_length() - 1) // 4
+            support &= ~(0xf << (4*site))
+
+            stagger = -1 if site & 1 else 1
+            for rem1, rem2, coeff in _ETA_LADDER_TERMS[axis]:
+                mode1 = 4*site + rem1
+                mode2 = 4*site + rem2
+                eta_mask = (1 << mode1) | (1 << mode2)
+                if (monomial.mask & eta_mask).bit_count() != 1:
+                    continue
+
+                prod = MajoranaMonomial(self.L, monomial.mask ^ eta_mask)
+                if not self._sym_allowed(prod):
+                    continue
+                canon = self._sym_canon(prod, sign=True)
+                if canon is None:
+                    continue
+                key, canon_sign = canon
+                if key not in self.var_index:
+                    return None
+
+                sign = -1 if (
+                    (monomial.mask & ((1 << mode1) - 1)).bit_count()
+                    + (monomial.mask & ((1 << mode2) - 1)).bit_count()
+                ) & 1 else 1
+                idx = self.var_index[key]
+                expr[idx] = expr.get(idx, 0) + 2 * stagger * coeff * sign * canon_sign / prod.hermitian_phase()
+                if expr[idx] == 0:
+                    del expr[idx]
+
+        return LinearExpr(terms=expr, const=0)
+
+    def _add_eta_wards(self, axis: str):
+        r'''
+            add representable eta-pairing SU(2) Ward identities <[eta^a, O]> == 0
+            within the current SDP variable set
+
+            note <[eta^z, O]> == 0 has been covered by total-number conservation.
+        '''
+        assert axis in ('+', '-')
+        seen_masks = set()
+        seen_keys = set()
+
+        for var in self.vars:
+            support = var.mask
+            while support:
+                bit = support & -support
+                site = (bit.bit_length() - 1) // 4
+                support &= ~(0xf << (4*site))
+
+                for rem1, rem2, _ in _ETA_LADDER_TERMS[axis]:
+                    eta_mask = (1 << (4*site + rem1)) | (1 << (4*site + rem2))
+                    if (var.mask & eta_mask).bit_count() != 1:
+                        continue
+                    mask = var.mask ^ eta_mask
+                    if mask in seen_masks:
+                        continue
+                    seen_masks.add(mask)
+
+                    cand = MajoranaMonomial(self.L, mask)
+                    # trans_canon is cheaper than _sym_canon
+                    # although it may produce redundant Ward identities
+                    key = self.trans_canon(cand)
+                    # key = self._sym_canon(cand)
+                    # if key is None:
+                    #     continue
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+
+                    expr = self._compile_eta_ward(cand, axis)
+                    if expr is None or not expr.terms:
+                        continue
+                    self.affines.add(expr)
+                    self.ward_ops[f'eta{axis}'] += 1
+
     def _build_affines(self):
         self.affines = AffineConstraints(n_vars=len(self.vars))
         for key in self.ward_ops:
@@ -699,14 +804,18 @@ class HubbardCompiler:
 
         # S^- Ward identities are redundant with S^+:
         # they use the same Majorana bilinear masks and hence generate identical candidates O.
-        # because (S^+)^dag = S^-, we have
+        # because (S^+)^dag = S^- and O carries definite K parity, O^dag = chi_O O, we have
         #
-        #   [S^+, O] = -eta_O [S^-, O]^dag
+        #   [S^+, O] = -chi_O [S^-, O]^dag.
         #
-        # for O^dag = eta_O O. After compiling to hermitianized real variables,
-        # each S^- Ward identity maps one-to-one to the corresponding S^+ Ward identity.
+        # so each S^- Ward identity maps one-to-one to the corresponding S^+ Ward identity
+        # after compiled to hermitianized real variables.
         self._add_spin_wards('+')
         # self._add_spin_wards('-')
+
+        if self.use_eta_sym:
+            self._add_eta_wards('+')
+            # self._add_eta_wards('-')
 
         self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-12)
 

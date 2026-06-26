@@ -112,6 +112,7 @@ PYBIND11_MODULE(@MODULE_NAME@, m) {
         .def("hermitian_phase", &MajoranaMonomial::hermitian_phase)
         .def("fermion_parity", &fermion_parity, py::arg("spin") = false)
         .def("k_parity", &MajoranaMonomial::k_parity, py::arg("hermitian") = true)
+        .def("ph_parity", &MajoranaMonomial::ph_parity)
 
         // physical/symmetry operations
         .def("mul", &MajoranaMonomial::mul)
