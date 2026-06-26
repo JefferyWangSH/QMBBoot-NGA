@@ -84,6 +84,22 @@ def build_szz(params: HubbardParams, r: int):
     return build_sz(params, 0).mul(build_sz(params, r))
 
 
+def build_double_occ(params: HubbardParams):
+    double_occ_op = MajoranaOperator({MajoranaMonomial.identity(params.L): .25})
+    for x in range(params.L):
+        for spin in ('u', 'd'):
+            monomial, sign = MajoranaMonomial.from_str(
+                L=params.L, s=f'{x}{spin}+ {x}{spin}-', sign=True
+            )
+            double_occ_op.add(monomial, .25j * sign / params.L)
+
+        monomial, sign = MajoranaMonomial.from_str(
+            L=params.L, s=f'{x}u+ {x}u- {x}d+ {x}d-', sign=True
+        )
+        double_occ_op.add(monomial, -.25 * sign / params.L)
+    return double_occ_op
+
+
 class HubbardCompiler:
     L: int
     params: HubbardParams

@@ -14,7 +14,7 @@
     "e_ub": null
   },
   "observables": [
-    "hamil", "szz"
+    "hamil", "szz", "double_occ"
   ],
   "basis": {
     "initial": {

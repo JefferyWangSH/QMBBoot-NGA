@@ -61,7 +61,7 @@ class ModelAdapter:
         basis_config = data['basis']
 
         if model_type == 'hubbard':
-            from compiler.hubbard import HubbardCompiler, HubbardParams, build_basis_reprs, build_hamil, build_szz
+            from compiler.hubbard import HubbardCompiler, HubbardParams, build_basis_reprs, build_hamil, build_szz, build_double_occ
             from operators.majorana import MajoranaMonomial
             model_params = HubbardParams(**model_config)
 
@@ -70,6 +70,8 @@ class ModelAdapter:
                     return build_hamil(model_params)
                 if name == 'szz':
                     return build_szz(model_params, 1)
+                if name == 'double_occ':
+                    return build_double_occ(model_params)
                 raise ValueError(f'unknown Hubbard objective: {name}')
 
             def build_obs(name):
@@ -77,6 +79,8 @@ class ModelAdapter:
                     return build_hamil(model_params)
                 if name == 'szz':
                     return [build_szz(model_params, r) for r in range(model_params.L//2 + 1)]
+                if name == 'double_occ':
+                    return build_double_occ(model_params)
                 raise ValueError(f'unknown Hubbard observable: {name}')
 
             compiler = HubbardCompiler(
@@ -95,7 +99,7 @@ class ModelAdapter:
             required_basis = build_basis(basis_config['required'])
 
         elif model_type == 'hubbard_square':
-            from compiler.hubbard_square import HubbardSquareCompiler, HubbardSquareParams, build_basis_reprs, build_hamil, build_szz
+            from compiler.hubbard_square import HubbardSquareCompiler, HubbardSquareParams, build_basis_reprs, build_hamil, build_szz, build_double_occ
             from operators.majorana_square import MajoranaMonomialSquare
             model_params = HubbardSquareParams(**model_config)
 
@@ -104,6 +108,8 @@ class ModelAdapter:
                     return build_hamil(model_params)
                 if name == 'szz':
                     return build_szz(model_params, 1, 0)
+                if name == 'double_occ':
+                    return build_double_occ(model_params)
                 raise ValueError(f'unknown Hubbard square objective: {name}')
 
             def build_obs(name):
@@ -115,6 +121,8 @@ class ModelAdapter:
                         for dx in range(model_params.Lx)
                         for dy in range(model_params.Ly)
                     ]
+                if name == 'double_occ':
+                    return build_double_occ(model_params)
                 raise ValueError(f'unknown Hubbard square observable: {name}')
 
             compiler = HubbardSquareCompiler(

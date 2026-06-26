@@ -97,6 +97,26 @@ def build_szz(params: HubbardSquareParams, dx: int, dy: int) -> MajoranaSquareOp
     return build_sz(params, 0, 0).mul(build_sz(params, dx, dy))
 
 
+def build_double_occ(params: HubbardSquareParams) -> MajoranaSquareOperator:
+    Lx = params.Lx
+    Ly = params.Ly
+    n_sites = params.n_sites
+    double_occ_op = MajoranaSquareOperator({MajoranaMonomialSquare.identity(Lx, Ly): .25})
+    for x in range(Lx):
+        for y in range(Ly):
+            for spin in ('u', 'd'):
+                monomial, sign = MajoranaMonomialSquare.from_str(
+                    Lx, Ly, f'({x},{y}){spin}+ ({x},{y}){spin}-', sign=True
+                )
+                double_occ_op.add(monomial, .25j * sign / n_sites)
+
+            monomial, sign = MajoranaMonomialSquare.from_str(
+                Lx, Ly, f'({x},{y})u+ ({x},{y})u- ({x},{y})d+ ({x},{y})d-', sign=True
+            )
+            double_occ_op.add(monomial, -.25 * sign / n_sites)
+    return double_occ_op
+
+
 class HubbardSquareCompiler:
     params: HubbardSquareParams
     Lx: int
