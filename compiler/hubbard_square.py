@@ -930,17 +930,23 @@ def build_basis_reprs(
     max_degree: int,
     max_support: int,
     windows: list[tuple[int, int]],
-    parity_sector: tuple[int, int] | None = None,
+    fermion_parity: tuple[int, int] | None = None,
+    ph_parity: int | None = None,
 ):
     n_sites = Lx * Ly
     if max_degree < 0 or max_degree > 4 * n_sites:
         raise ValueError('max_degree must be between 0 and 4*Lx*Ly')
     if max_support < 0 or max_support > n_sites:
         raise ValueError('max_support must be between 0 and Lx*Ly')
-    if parity_sector is not None:
-        parity_sector = tuple(parity_sector)
-        if parity_sector not in ((0, 0), (0, 1), (1, 0), (1, 1)):
-            raise ValueError('parity_sector must be one of (0, 0), (0, 1), (1, 0), (1, 1)')
+    if fermion_parity is not None:
+        fermion_parity = tuple(fermion_parity)
+        if fermion_parity not in ((0, 0), (0, 1), (1, 0), (1, 1)):
+            raise ValueError('fermion_parity must be one of (0, 0), (0, 1), (1, 0), (1, 1), or None')
+    if ph_parity is not None:
+        if ph_parity not in (0, 1):
+            raise ValueError('ph_parity must be one of 0, 1, or None')
+        if fermion_parity not in ((0, 0), (1, 1)):
+            raise ValueError('ph_parity filtering is only valid with fermion_parity (0, 0) or (1, 1)')
 
     parsed_windows = []
     for window in windows:
@@ -954,7 +960,10 @@ def build_basis_reprs(
 
     reps = {}
     identity = MajoranaMonomialSquare.identity(Lx, Ly)
-    if parity_sector is None or identity.fermion_parity(spin=True) == parity_sector:
+    if (
+        (fermion_parity is None or identity.fermion_parity(spin=True) == fermion_parity)
+        and (ph_parity is None or identity.ph_parity() == ph_parity)
+    ):
         reps[identity.trans_canon] = identity.trans_canon_rep
 
     local_masks = tuple(range(1, 1 << 4))
@@ -968,7 +977,9 @@ def build_basis_reprs(
                         continue
                     raw_mask = sum(local_mask << (4 * site) for site, local_mask in zip(sites, masks))
                     cand = MajoranaMonomialSquare(Lx, Ly, raw_mask)
-                    if parity_sector is not None and cand.fermion_parity(spin=True) != parity_sector:
+                    if fermion_parity is not None and cand.fermion_parity(spin=True) != fermion_parity:
+                        continue
+                    if ph_parity is not None and cand.ph_parity() != ph_parity:
                         continue
                     reps.setdefault(cand.trans_canon, cand.trans_canon_rep)
 

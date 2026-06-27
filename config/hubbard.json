@@ -20,7 +20,8 @@
       "max_degree": 4,
       "max_support": 1,
       "max_diameter": 0,
-      "parity_sector": null
+      "fermion_parity": null,
+      "ph_parity": null
     },
     "required": [
       "I",

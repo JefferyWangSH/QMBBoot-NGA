@@ -999,15 +999,19 @@ class HubbardCompiler:
         1) max_degree restricts the max number of majorana operator;
         2) max_support restricts the max number of lattice sites involved;
         3) max_diameter restricts the max distance of any two majorana operators;
-        4) parity_sector, when provided, keeps only monomials with the given
-           spin-resolved fermion parity (N_up mod 2, N_down mod 2).
+        4) fermion_parity, when provided, keeps only monomials with the given
+           spin-resolved fermion parity (N_up mod 2, N_down mod 2);
+        5) ph_parity, when provided, keeps only monomials with the given particle-hole parity;
+           it is only allowed in the 00/11 fermion parity sectors because particle-hole
+           symmetry does not commute with single-site translation in the 01/10 sectors.
 '''
 def build_basis_reprs(
     L: int,
     max_degree: int,
     max_support: int,
     max_diameter: int,
-    parity_sector: tuple[int, int] | None = None,
+    fermion_parity: tuple[int, int] | None = None,
+    ph_parity: int | None = None,
 ):
     if max_degree < 0 or max_degree > 4 * L:
         raise ValueError('max_degree must be between 0 and 4L')
@@ -1015,14 +1019,22 @@ def build_basis_reprs(
         raise ValueError('max_support must be between 0 and L')
     if max_diameter < 0 or max_diameter > L // 2:
         raise ValueError('max_diameter must be between 0 and ⌊L/2⌋')
-    if parity_sector is not None:
-        parity_sector = tuple(parity_sector)
-        if parity_sector not in ((0, 0), (0, 1), (1, 0), (1, 1)):
-            raise ValueError('parity_sector must be one of (0, 0), (0, 1), (1, 0), (1, 1)')
+    if fermion_parity is not None:
+        fermion_parity = tuple(fermion_parity)
+        if fermion_parity not in ((0, 0), (0, 1), (1, 0), (1, 1)):
+            raise ValueError('fermion_parity must be one of (0, 0), (0, 1), (1, 0), (1, 1), or None')
+    if ph_parity is not None:
+        if ph_parity not in (0, 1):
+            raise ValueError('ph_parity must be one of 0, 1, or None')
+        if fermion_parity not in ((0, 0), (1, 1)):
+            raise ValueError('ph_parity filtering is only valid with fermion_parity (0, 0) or (1, 1)')
 
     reps = {}
     identity = MajoranaMonomial.identity(L=L)
-    if parity_sector is None or identity.fermion_parity(spin=True) == parity_sector:
+    if (
+        (fermion_parity is None or identity.fermion_parity(spin=True) == fermion_parity)
+        and (ph_parity is None or identity.ph_parity() == ph_parity)
+    ):
         reps[identity.trans_canon] = identity.trans_canon_rep
 
     local_masks = tuple(range(1, 1 << 4))
@@ -1047,7 +1059,9 @@ def build_basis_reprs(
                     for site, local_mask in zip(sites, masks)
                 )
                 cand = MajoranaMonomial(L=L, mask=mask)
-                if parity_sector is not None and cand.fermion_parity(spin=True) != parity_sector:
+                if fermion_parity is not None and cand.fermion_parity(spin=True) != fermion_parity:
+                    continue
+                if ph_parity is not None and cand.ph_parity() != ph_parity:
                     continue
                 reps.setdefault(cand.trans_canon, cand.trans_canon_rep)
 
