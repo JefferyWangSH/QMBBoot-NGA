@@ -40,10 +40,7 @@ Additional model-specific symmetries:
 * NumPy, SciPy, CVXPY, scikit-sparse, lru-dict
 * (optional) cppimport, pybind11, and a C++20 compiler for JIT
 
-## TODOs
-- [ ] Bootstrap thermal states.
-
-## Refs
+## References
 * https://arxiv.org/pdf/2410.00810
 * https://arxiv.org/pdf/2310.05844
 * https://arxiv.org/pdf/2406.17844

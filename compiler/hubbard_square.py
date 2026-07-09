@@ -607,7 +607,7 @@ class HubbardSquareCompiler:
         self._add_number_wards('u')
         self._add_number_wards('d')
 
-        # S^- Ward identities are redundant with S^+ for generator O with definite K parity
+        # S^- Ward identities are redundant with S^+
         self._add_spin_wards('+')
 
         if self.use_eta_sym:

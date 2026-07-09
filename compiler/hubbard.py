@@ -820,7 +820,7 @@ class HubbardCompiler:
 
         # S^- Ward identities are redundant with S^+:
         # they use the same Majorana bilinear masks and hence generate identical candidates O.
-        # because (S^+)^dag = S^- and O carries definite K parity, O^dag = chi_O O, we have
+        # because (S^+)^dag = S^- and O^dag = chi_O O, we have
         #
         #   [S^+, O] = -chi_O [S^-, O]^dag.
         #
