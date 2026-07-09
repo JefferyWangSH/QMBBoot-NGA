@@ -1,97 +1,107 @@
-import itertools
-
 import numpy as np
-from scipy import sparse
-from scipy.sparse.linalg import eigsh
+from quspin.basis import spinful_fermion_basis_1d
+from quspin.operators import hamiltonian
 
-def _mode(site: int, spin: int) -> int:
-    return 2 * site + spin
+class HubbardED:
+    def __init__(
+        self,
+        L: int,
+        Nf: tuple[int, int],
+        t: float = 1.,
+        U: float = 4.,
+        dtype=np.float64,
+        **basis_kwargs,
+    ):
+        self.L = L
+        self.Nf = Nf
+        self.t = t
+        self.U = U
+        self.dtype = dtype
+        self.basis = spinful_fermion_basis_1d(L, Nf, **basis_kwargs)
+        self.const = U / 4
 
-def _sector_basis(L: int, n_particles: int | None):
-    n_modes = 2 * L
-    if n_particles is None:
-        return list(range(1 << n_modes))
-    return [
-        sum(1 << mode for mode in modes)
-        for modes in itertools.combinations(range(n_modes), n_particles)
-    ]
+        hop_right = [[-t / L, i, (i + 1) % L] for i in range(L)]
+        hop_left = [[-t / L, (i + 1) % L, i] for i in range(L)]
+        interaction = [[U / L, i, i] for i in range(L)]
+        number_shift = [[-U / (2 * L), i] for i in range(L)]
+        self.H = hamiltonian(
+            [
+                ['+-|', hop_right],
+                ['+-|', hop_left],
+                ['|+-', hop_right],
+                ['|+-', hop_left],
+                ['n|n', interaction],
+                ['n|', number_shift],
+                ['|n', number_shift],
+            ],
+            [],
+            basis=self.basis,
+            dtype=self.dtype,
+            check_symm=False,
+            check_herm=False,
+            check_pcon=False,
+        )
 
-def _annihilate(state: int, mode: int):
-    bit = 1 << mode
-    if state & bit == 0:
-        return None
-    sign = -1 if (state & (bit - 1)).bit_count() % 2 else 1
-    return state ^ bit, sign
+        self.energy = None
+        self.vec = None
 
-def _create(state: int, mode: int):
-    bit = 1 << mode
-    if state & bit:
-        return None
-    sign = -1 if (state & (bit - 1)).bit_count() % 2 else 1
-    return state | bit, sign
+    def solve(self, tol=1e-12, ncv=None, maxiter=None, vec=True):
+        eigsh_kwargs = {'k': 1, 'which': 'SA', 'tol': tol}
+        if ncv is not None:
+            eigsh_kwargs['ncv'] = ncv
+        if maxiter is not None:
+            eigsh_kwargs['maxiter'] = maxiter
 
-def _add_hop(rows, cols, vals, index, col, dst: int, src: int, coeff: float):
-    out = _annihilate(col, src)
-    if out is None:
-        return
-    state, sign1 = out
-    out = _create(state, dst)
-    if out is None:
-        return
-    row, sign2 = out
-    rows.append(index[row])
-    cols.append(index[col])
-    vals.append(coeff * sign1 * sign2)
+        if vec:
+            vals, vecs = self.H.eigsh(return_eigenvectors=True, **eigsh_kwargs)
+            self.energy = float(vals[0] + self.const)
+            self.vec = vecs[:, 0]
+        else:
+            val = self.H.eigsh(return_eigenvectors=False, **eigsh_kwargs)[0]
+            self.energy = float(val + self.const)
+            self.vec = None
+        return self.energy
 
-def hamil(L: int, t: float = 1., U: float = 4., n_particles: int | None = None):
-    if L < 2:
-        raise ValueError('L must be at least 2')
-    if n_particles is not None and not 0 <= n_particles <= 2 * L:
-        raise ValueError('n_particles must be between 0 and 2L')
+    def _expt(self, static, vec=None):
+        if vec is None and self.vec is None:
+            raise ValueError('solve with vec=True first, or pass vec explicitly')
+        op = hamiltonian(
+            static,
+            [],
+            basis=self.basis,
+            dtype=self.dtype,
+            check_symm=False,
+            check_herm=False,
+            check_pcon=False,
+        )
+        return float(op.expt_value(vec if vec is not None else self.vec).real)
 
-    basis = _sector_basis(L, n_particles)
-    index = {state: idx for idx, state in enumerate(basis)}
-    rows = []
-    cols = []
-    vals = []
+    def szz(self, r: int, vec=None):
+        L = self.L
+        up_up = [[.25 / L, i, (i + r) % L] for i in range(L)]
+        down_down = [[.25 / L, i, (i + r) % L] for i in range(L)]
+        up_down = [[-.25 / L, i, (i + r) % L] for i in range(L)]
+        down_up = [[-.25 / L, (i + r) % L, i] for i in range(L)]
+        return self._expt([
+            ['nn|', up_up],
+            ['|nn', down_down],
+            ['n|n', up_down],
+            ['n|n', down_up],
+        ], vec=vec)
 
-    for col_idx, state in enumerate(basis):
-        diag = 0.
-        for site in range(L):
-            n_up = (state >> _mode(site, 0)) & 1
-            n_dn = (state >> _mode(site, 1)) & 1
-            diag += U * (n_up - .5) * (n_dn - .5) / L
-        if diag != 0:
-            rows.append(col_idx)
-            cols.append(col_idx)
-            vals.append(diag)
+    def double_occ(self, vec=None):
+        terms = [[1. / self.L, i, i] for i in range(self.L)]
+        return self._expt([['n|n', terms]], vec=vec)
 
-    for state in basis:
-        for site in range(L):
-            site_next = (site + 1) % L
-            for spin in (0, 1):
-                mode = _mode(site, spin)
-                mode_next = _mode(site_next, spin)
-                _add_hop(rows, cols, vals, index, state, mode, mode_next, -t/L)
-                _add_hop(rows, cols, vals, index, state, mode_next, mode, -t/L)
 
-    dim = len(basis)
-    return sparse.csr_matrix((vals, (rows, cols)), shape=(dim, dim), dtype=float)
-
-def szz(L: int, vec, r: int, n_particles: int | None = None):
-    basis = np.array(_sector_basis(L, n_particles), dtype=np.uint64)
-    up_sites = np.arange(0, 2 * L, 2, dtype=np.uint64)
-    dn_sites = up_sites + 1
-    n_up = ((basis[:, None] >> up_sites) & 1).astype(float)
-    n_dn = ((basis[:, None] >> dn_sites) & 1).astype(float)
-    spins = .5 * (n_up - n_dn)
-    corr = (spins * np.roll(spins, -r, axis=1)).mean(axis=1)
-    return float(np.dot(np.abs(vec) ** 2, corr))
-
-def gs(L: int, t: float = 1., U: float = 4., n_particles: int | None = None, tol=1e-12, vec=False):
-    H = hamil(L, t=t, U=U, n_particles=n_particles)
-    if vec:
-        vals, vecs = eigsh(H, k=1, which='SA', tol=tol)
-        return float(vals[0]), vecs[:, 0]
-    val = eigsh(H, k=1, which='SA', return_eigenvectors=False, tol=tol)[0]
-    return float(val)
+if __name__ == '__main__':
+    model = HubbardED(L=10, Nf=(5, 5))
+    # model = HubbardED(L=16, Nf=(7, 7), kblock=0)
+    print(f'L: {model.L}')
+    print(f'Nf: {model.Nf}')
+    print(f't: {model.t}')
+    print(f'U: {model.U}')
+    print(f'basis size: {model.basis.Ns}')
+    print(f'energy: {model.solve():.12f}')
+    print(f'double_occ: {model.double_occ():.12f}')
+    print(f'szz: {[model.szz(r) for r in range(model.L // 2 + 1)]}')

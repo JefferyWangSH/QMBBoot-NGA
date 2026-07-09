@@ -1,56 +1,86 @@
 import numpy as np
-from scipy import sparse
-from scipy.sparse.linalg import eigsh
+from quspin.basis import spin_basis_1d
+from quspin.operators import hamiltonian
 
-_sx = sparse.csr_matrix(np.array([[0, 1], [1, 0]], dtype=float))
-_sz = sparse.csr_matrix(np.array([[1, 0], [0, -1]], dtype=float))
-_id = sparse.identity(2, format='csr', dtype=float)
+class IsingED:
+    def __init__(
+        self,
+        L: int,
+        J: float = 1.,
+        h: float = 1.,
+        hz: float = 0.,
+        dtype=np.float64,
+        **basis_kwargs,
+    ):
+        self.L = L
+        self.J = J
+        self.h = h
+        self.hz = hz
+        self.dtype = dtype
+        self.basis = spin_basis_1d(L, pauli=1, **basis_kwargs)
 
-def kron(ops):
-    ops = tuple(ops)
-    if not ops:
-        raise ValueError('ops must be non-empty')
-    out = ops[0]
-    for op in ops[1:]:
-        out = sparse.kron(out, op, format='csr')
-    return out
+        x_field = [[-h / L, i] for i in range(L)]
+        z_field = [[-hz / L, i] for i in range(L)]
+        zz_coupling = [[-J / L, i, (i + 1) % L] for i in range(L)]
+        self.H = hamiltonian(
+            [
+                ['x', x_field],
+                ['z', z_field],
+                ['zz', zz_coupling],
+            ],
+            [],
+            basis=self.basis,
+            dtype=self.dtype,
+            check_symm=False,
+            check_herm=False,
+            check_pcon=False,
+        )
 
-def hamil(L, J=1., h=1., hz=0.):
-    if L < 2:
-        raise ValueError('L must be at least 2')
+        self.energy = None
+        self.vec = None
 
-    dim = 1 << L
-    H = sparse.csr_matrix((dim, dim), dtype=float)
+    def solve(self, tol=1e-12, ncv=None, maxiter=None, vec=True):
+        eigsh_kwargs = {'k': 1, 'which': 'SA', 'tol': tol}
+        if ncv is not None:
+            eigsh_kwargs['ncv'] = ncv
+        if maxiter is not None:
+            eigsh_kwargs['maxiter'] = maxiter
 
-    for i in range(L):
-        ops = [_id] * L
-        ops[i] = _sx
-        H += -h * kron(ops)
+        if vec:
+            vals, vecs = self.H.eigsh(return_eigenvectors=True, **eigsh_kwargs)
+            self.energy = float(vals[0])
+            self.vec = vecs[:, 0]
+        else:
+            val = self.H.eigsh(return_eigenvectors=False, **eigsh_kwargs)[0]
+            self.energy = float(val)
+            self.vec = None
+        return self.energy
 
-    for i in range(L):
-        ops = [_id] * L
-        ops[i] = _sz
-        H += -hz * kron(ops)
+    def _expt(self, static, vec=None):
+        if vec is None and self.vec is None:
+            raise ValueError('solve with vec=True first, or pass vec explicitly')
+        op = hamiltonian(
+            static,
+            [],
+            basis=self.basis,
+            dtype=self.dtype,
+            check_symm=False,
+            check_herm=False,
+            check_pcon=False,
+        )
+        return float(op.expt_value(vec if vec is not None else self.vec).real)
 
-    for i in range(L):
-        ops = [_id] * L
-        ops[i] = _sz
-        ops[(i + 1) % L] = _sz
-        H += -J * kron(ops)
+    def zz(self, r: int, vec=None):
+        terms = [[1. / self.L, i, (i + r) % self.L] for i in range(self.L)]
+        return self._expt([['zz', terms]], vec=vec)
 
-    return H / L
 
-def zz(L, vec, r):
-    states = np.arange(1 << L, dtype=np.uint64)
-    sites = np.arange(L, dtype=np.uint64)
-    spins = 1. - 2. * ((states[:, None] >> sites) & 1)
-    corr = (spins * np.roll(spins, -r, axis=1)).mean(axis=1)
-    return float(np.dot(np.abs(vec) ** 2, corr))
-
-def gs(L, J=1., h=1., hz=0., tol=1e-12, vec=False):
-    H = hamil(L, J=J, h=h, hz=hz)
-    if vec:
-        vals, vecs = eigsh(H, k=1, which='SA', tol=tol)
-        return float(vals[0]), vecs[:, 0]
-    val = eigsh(H, k=1, which='SA', return_eigenvectors=False, tol=tol)[0]
-    return float(val)
+if __name__ == '__main__':
+    model = IsingED(L=16, J=1., h=1., hz=.1)
+    print(f'L: {model.L}')
+    print(f'J: {model.J}')
+    print(f'h: {model.h}')
+    print(f'hz: {model.hz}')
+    print(f'basis size: {model.basis.Ns}')
+    print(f'energy: {model.solve():.12f}')
+    print(f'zz: {[model.zz(r) for r in range(model.L // 2 + 1)]}')
