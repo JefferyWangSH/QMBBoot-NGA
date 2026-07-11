@@ -126,7 +126,10 @@ class AffineConstraints:
         if not prune or self.n_rows == 0:
             return mat, self.n_rows
 
-        r, piv = spqr.spqr(mat.T.tocsc(), mode='r', tol=tol)
+        mat_t = mat.T.tocsc()
+        mat_t.indices = mat_t.indices.astype(np.int64, copy=False)
+        mat_t.indptr = mat_t.indptr.astype(np.int64, copy=False)
+        r, piv = spqr.spqr(mat_t, mode='r', tol=tol)
         rank = int(np.count_nonzero(np.abs(r.diagonal()) > tol))
         return mat[sorted(piv[:rank])], rank
 
