@@ -7,6 +7,7 @@
   * and impose Ward-identity constraints.
 * Use [CVXPY](https://github.com/cvxpy/cvxpy) for solving SDPs.
 * Build PSD blocks as vectorized sparse affine maps and build affine constraints as a sparse matrix.
+* Enable JIT acceleration for symbolic operator algebra and SDP compilation by setting environment variable `USE_JIT=1` (the default). Set `USE_JIT=0` to use the Python fallback.
 
 ## Models
 Implemented:
