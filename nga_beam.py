@@ -127,8 +127,10 @@ class NGABeamRunner:
             self.basis_reprs.append(rep)
 
         self.required_basis_reprs = [self._canon_rep(rep) for rep in required_basis_reprs]
-        self.required_basis_keys = {self._canon(rep) for rep in required_basis_reprs}
-        
+        self.required_basis_keys = {self._canon(rep) for rep in self.required_basis_reprs}
+        if self.required_basis_keys - reprs_seen:
+            raise ValueError('required basis representatives must be included in basis_reprs')
+
         self.scheduler = scheduler
         self.nga_params = nga_params
         self.max_workers = max_workers
@@ -244,7 +246,7 @@ class NGABeamRunner:
         cand_reps = {}
         null_eigvals = []
 
-        for n, block_reprs, eigvals, eigvecs in zip(
+        for q, block_reprs, eigvals, eigvecs in zip(
             self.compiler.block_momenta,
             self.compiler.block_reprs,
             self.psd_eigvals,
@@ -256,7 +258,6 @@ class NGABeamRunner:
 
             null_eigvals.extend(eigvals[null_mask])
             null_eigvecs = eigvecs[:, null_mask]
-            k = 2 * np.pi * n / self.compiler.L
 
             desc_rows = {}
             desc_keys = []
@@ -269,7 +270,7 @@ class NGABeamRunner:
                     desc_key = self._canon(desc_rep)
                     if desc_key in basis_keys:
                         continue
-                    if not self.compiler.nonzero_fourier(desc_rep, n):
+                    if not self.compiler.nonzero_fourier(desc_rep, q):
                         continue
 
                     row = desc_rows.get(desc_key)
@@ -282,7 +283,7 @@ class NGABeamRunner:
 
                     rows.append(row)
                     cols.append(a_idx)
-                    data.append(coeff * np.exp(1j * k * s))
+                    data.append(coeff * self.compiler.fourier_phase(q, s))
 
             if not data:
                 continue
