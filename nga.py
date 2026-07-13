@@ -110,8 +110,8 @@ class NGARunner:
 
         self.basis_indices = {self._canon(rep): idx for idx, rep in enumerate(self.basis_reprs)}
         self.required_basis_reprs = [self._canon_rep(rep) for rep in required_basis_reprs]
-        self.required_keys = {self._canon(rep) for rep in self.required_basis_reprs}
-        if self.required_keys - set(self.basis_indices):
+        self.required_basis_keys = {self._canon(rep) for rep in self.required_basis_reprs}
+        if self.required_basis_keys - set(self.basis_indices):
             raise ValueError('required basis representatives must be included in basis_reprs')
 
         self.scheduler = scheduler
@@ -227,7 +227,7 @@ class NGARunner:
         cands = [
             (score, self._canon(rep))
             for rep, score in zip(self.basis_reprs, leverage)
-            if self._canon(rep) not in self.required_keys
+            if self._canon(rep) not in self.required_basis_keys
             and score < self.nga_params.max_drop_leverage
         ]
         # sorted by leverages in nullspace (ascending)
