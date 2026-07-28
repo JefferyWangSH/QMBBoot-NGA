@@ -17,42 +17,39 @@ inline std::optional<std::pair<MajoranaMonomial<L>, int>> sym_canon(const Majora
         return std::nullopt;
     }
 
-    bool initialized = false;
-    bool sign_conflict = false;
-    MajoranaMonomial<L> canon = MajoranaMonomial<L>::identity();
+    std::optional<MajoranaMonomial<L>> canon;
     int canon_sign = 1;
+    bool sign_conflict = false;
 
     for (int up_quarters = 0; up_quarters < 4; ++up_quarters) {
         for (int dn_quarters = 0; dn_quarters < 4; ++dn_quarters) {
-            auto [rotated, rot_sign] = monomial.c4_rotate(up_quarters, dn_quarters);
+            auto [rotated, rotated_sign] = monomial.c4_rotate(up_quarters, dn_quarters);
 
             for (const bool use_exchange : {false, true}) {
                 auto exchanged = rotated;
-                auto exchange_sign = rot_sign;
+                auto exchanged_sign = rotated_sign;
                 if (use_exchange) {
-                    auto [next, step_sign] = rotated.spin_exchange();
-                    exchanged = std::move(next);
-                    exchange_sign *= step_sign;
+                    auto [mapped, step_sign] = rotated.spin_exchange();
+                    exchanged = std::move(mapped);
+                    exchanged_sign *= step_sign;
                 }
 
                 for (const bool use_invert : {false, true}) {
-                    auto cand = exchanged;
-                    auto cand_sign = exchange_sign;
+                    auto inverted = exchanged;
+                    auto inverted_sign = exchanged_sign;
                     if (use_invert) {
-                        auto [next, step_sign] = exchanged.invert();
-                        cand = std::move(next);
-                        cand_sign *= step_sign;
+                        auto [mapped, step_sign] = exchanged.invert();
+                        inverted = std::move(mapped);
+                        inverted_sign *= step_sign;
                     }
 
-                    auto [trans_cand, trans_sign] = cand.trans_canon();
-                    cand_sign *= trans_sign;
-
-                    if (!initialized || trans_cand.less(canon)) {
-                        canon = std::move(trans_cand);
+                    auto [cand, step_sign] = inverted.trans_canon();
+                    auto cand_sign = inverted_sign * step_sign;
+                    if (!canon || cand < *canon) {
+                        canon = std::move(cand);
                         canon_sign = cand_sign;
                         sign_conflict = false;
-                        initialized = true;
-                    } else if (trans_cand == canon && cand_sign != canon_sign) {
+                    } else if (cand == *canon && cand_sign != canon_sign) {
                         sign_conflict = true;
                     }
                 }
@@ -63,7 +60,7 @@ inline std::optional<std::pair<MajoranaMonomial<L>, int>> sym_canon(const Majora
     if (sign_conflict) {
         return std::nullopt;
     }
-    return std::pair{std::move(canon), canon_sign};
+    return std::pair{std::move(*canon), canon_sign};
 }
 
 }  // namespace qmbboot::compiler::hubbard

@@ -108,8 +108,8 @@ class HubbardCompiler:
     block_reprs: list[list[MajoranaMonomial]]
     block_momenta: list[int]
 
-    # SDP variables are real expectations of
-    # hermitianized Majorana monomials with even fermion parity for each spin and even K parity
+    # SDP variables are real expectations of hermitianized Majorana monomials
+    # with even fermion parity for each spin, even K parity, and even particle-hole parity at half filling
     var_cpx: bool = False
     var_index: dict[int, int]
     vars: list[MajoranaMonomial]
@@ -251,26 +251,25 @@ class HubbardCompiler:
 
         cands = []
         for up_quarters, dn_quarters in itertools.product(range(4), repeat=2):
-            rotated, rot_sign = monomial.c4_rotate(up_quarters, dn_quarters)
+            rotated, rotated_sign = monomial.c4_rotate(up_quarters, dn_quarters)
 
             for exchange in (False, True):
                 exchanged = rotated
-                exchange_sign = rot_sign
+                exchanged_sign = rotated_sign
                 if exchange:
                     exchanged, step_sign = rotated.spin_exchange()
-                    exchange_sign *= step_sign
+                    exchanged_sign *= step_sign
 
                 for invert in (False, True):
-                    cand = exchanged
-                    cand_sign = exchange_sign
+                    inverted = exchanged
+                    inverted_sign = exchanged_sign
                     if invert:
-                        cand, step_sign = exchanged.invert()
-                        cand_sign *= step_sign
+                        inverted, step_sign = exchanged.invert()
+                        inverted_sign *= step_sign
 
-                    cands.append((
-                        cand.trans_canon,
-                        cand_sign * cand.trans_canon_sign,
-                    ))
+                    cand = inverted.trans_canon
+                    cand_sign = inverted_sign * inverted.trans_canon_sign
+                    cands.append((cand, cand_sign))
 
         canon_key = min(cand_key for cand_key, _ in cands)
         signs = {cand_sign for cand_key, cand_sign in cands if cand_key == canon_key}

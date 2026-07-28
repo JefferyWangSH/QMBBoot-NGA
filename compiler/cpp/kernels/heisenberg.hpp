@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstddef>
+#include <optional>
 #include <utility>
 
 namespace qmbboot::compiler::heisenberg {
@@ -25,21 +26,19 @@ inline PauliString<L> sym_canon(const PauliString<L>& pstr) {
         {{_PAULI_Z, _PAULI_Y, _PAULI_X}},
     }};
 
-    bool initialized = false;
-    PauliString<L> canon = PauliString<L>::identity();
+    std::optional<PauliString<L>> canon;
 
     for (const bool use_invert : {false, true}) {
         auto inv_image = use_invert ? pstr.invert() : pstr;
         for (const auto& perm : perms) {
             auto cand = inv_image.permute(perm).trans_canon();
-            if (!initialized || cand.less(canon)) {
+            if (!canon || cand < *canon) {
                 canon = std::move(cand);
-                initialized = true;
             }
         }
     }
 
-    return canon;
+    return std::move(*canon);
 }
 
 }  // namespace qmbboot::compiler::heisenberg

@@ -22,51 +22,48 @@ inline std::optional<std::pair<MajoranaMonomialSquare<Lx, Ly>, int>> sym_canon(
         }
     }
 
-    bool initialized = false;
-    bool sign_conflict = false;
-    MajoranaMonomialSquare<Lx, Ly> canon = MajoranaMonomialSquare<Lx, Ly>::identity();
+    std::optional<MajoranaMonomialSquare<Lx, Ly>> canon;
     int canon_sign = 1;
+    bool sign_conflict = false;
 
     for (int up_quarters = 0; up_quarters < 4; ++up_quarters) {
         for (int dn_quarters = 0; dn_quarters < 4; ++dn_quarters) {
-            auto [majorana_rotated, majorana_rot_sign] = monomial.majorana_c4_rotate(up_quarters, dn_quarters);
+            auto [maj_rotated, maj_rotated_sign] = monomial.majorana_c4_rotate(up_quarters, dn_quarters);
 
             for (const bool use_exchange : {false, true}) {
-                auto exchanged = majorana_rotated;
-                auto exchange_sign = majorana_rot_sign;
+                auto exchanged = maj_rotated;
+                auto exchanged_sign = maj_rotated_sign;
                 if (use_exchange) {
-                    auto [next, step_sign] = majorana_rotated.spin_exchange();
-                    exchanged = std::move(next);
-                    exchange_sign *= step_sign;
+                    auto [mapped, step_sign] = maj_rotated.spin_exchange();
+                    exchanged = std::move(mapped);
+                    exchanged_sign *= step_sign;
                 }
 
-                for (int lattice_quarters = 0; lattice_quarters < 4; ++lattice_quarters) {
+                for (int lat_quarters = 0; lat_quarters < 4; ++lat_quarters) {
                     if constexpr (Lx != Ly) {
-                        if (lattice_quarters & 1) {
+                        if (lat_quarters & 1) {
                             continue;
                         }
                     }
-                    auto [lattice_rotated, lattice_rot_sign] = exchanged.lattice_c4_rotate(lattice_quarters);
-                    lattice_rot_sign *= exchange_sign;
+                    auto [lat_rotated, step_sign] = exchanged.lattice_c4_rotate(lat_quarters);
+                    auto lat_rotated_sign = step_sign * exchanged_sign;
 
                     for (const bool use_reflect : {false, true}) {
-                        auto cand = lattice_rotated;
-                        auto cand_sign = lattice_rot_sign;
+                        auto lat_reflected = lat_rotated;
+                        auto lat_reflected_sign = lat_rotated_sign;
                         if (use_reflect) {
-                            auto [next, step_sign] = lattice_rotated.lattice_reflect_x();
-                            cand = std::move(next);
-                            cand_sign *= step_sign;
+                            auto [mapped, step_sign] = lat_rotated.lattice_reflect_x();
+                            lat_reflected = std::move(mapped);
+                            lat_reflected_sign *= step_sign;
                         }
 
-                        auto [trans_cand, trans_sign] = cand.trans_canon();
-                        cand_sign *= trans_sign;
-
-                        if (!initialized || trans_cand.less(canon)) {
-                            canon = std::move(trans_cand);
+                        auto [cand, step_sign] = lat_reflected.trans_canon();
+                        auto cand_sign = lat_reflected_sign * step_sign;
+                        if (!canon || cand < *canon) {
+                            canon = std::move(cand);
                             canon_sign = cand_sign;
                             sign_conflict = false;
-                            initialized = true;
-                        } else if (trans_cand == canon && cand_sign != canon_sign) {
+                        } else if (cand == *canon && cand_sign != canon_sign) {
                             sign_conflict = true;
                         }
                     }
@@ -78,7 +75,7 @@ inline std::optional<std::pair<MajoranaMonomialSquare<Lx, Ly>, int>> sym_canon(
     if (sign_conflict) {
         return std::nullopt;
     }
-    return std::pair{std::move(canon), canon_sign};
+    return std::pair{std::move(*canon), canon_sign};
 }
 
 }  // namespace qmbboot::compiler::hubbard_square

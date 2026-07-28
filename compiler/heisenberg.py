@@ -63,7 +63,7 @@ class HeisenbergCompiler:
 
     ward_ops: dict[str, int]
 
-    # we divide PSD blocks through both translation and spin-rotation of pi angle
+    # we divide PSD blocks using translation and pi-angle spin-rotation symmetry
     block_reprs: list[list[PauliString]]
     block_momenta: list[int]
     psd_blocks: list[PSDConstraints]
@@ -160,15 +160,15 @@ class HeisenbergCompiler:
             self._sym_canon_cache[pstr.mask] = key
             return key
 
-        orbit = []
+        orbits = []
         for inv_image in (pstr, pstr.invert()):
             for perm in itertools.permutations('XYZ'):
-                orbit.append(inv_image.permute(perm))
+                orbits.append(inv_image.permute(perm))
 
         # permutations commute with translation, and inversion maps T_s to T_{-s},
-        # so taking trans_canon after each inversion/S3 image covers the full orbit.
-        key = min(image.trans_canon for image in orbit)
-        for image in orbit:
+        # so taking trans_canon after each inversion/S3 image covers the full orbits.
+        key = min(image.trans_canon for image in orbits)
+        for image in orbits:
             self._sym_canon_cache[image.mask] = key
         return key
 

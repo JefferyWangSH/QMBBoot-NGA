@@ -178,9 +178,9 @@ class IsingCompiler:
         if pstr.mask in self._sym_canon_cache:
             return self._sym_canon_cache[pstr.mask]
 
-        orbit = [pstr, pstr.invert()]
-        key = min(image.trans_canon for image in orbit)
-        for image in orbit:
+        orbits = [pstr, pstr.invert()]
+        key = min(image.trans_canon for image in orbits)
+        for image in orbits:
             self._sym_canon_cache[image.mask] = key
         return key
 

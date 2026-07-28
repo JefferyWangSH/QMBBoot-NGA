@@ -62,7 +62,7 @@ class MajoranaMonomial {
             return m_words == other.m_words;
         }
 
-        bool less(const MajoranaMonomial& other) const {
+        bool operator<(const MajoranaMonomial& other) const {
             for (std::size_t idx = n_words; idx > 0; --idx) {
                 if (m_words[idx - 1] < other.m_words[idx - 1]) {
                     return true;
@@ -281,7 +281,7 @@ class MajoranaMonomial {
             int canon_sign = 1;
             for (std::size_t shift = 1; shift < L; ++shift) {
                 auto [cand, cand_sign] = translate(static_cast<int>(shift));
-                if (cand.less(canon)) {
+                if (cand < canon) {
                     canon = std::move(cand);
                     canon_sign = cand_sign;
                 }

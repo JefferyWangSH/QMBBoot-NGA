@@ -37,7 +37,7 @@ py::object sym_canon(const MajoranaMonomialSquare& monomial, bool sign) {
 }  // namespace
 
 PYBIND11_MODULE(@MODULE_NAME@, m) {
-    m.doc() = "JIT C++ Hubbard square compiler kernels";
+    m.doc() = "JIT C++ square-lattice Hubbard compiler kernels";
 
     m.def("sym_canon", &sym_canon, py::arg("monomial"), py::arg("sign") = false);
 }

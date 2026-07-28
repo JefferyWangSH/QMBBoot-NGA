@@ -291,31 +291,30 @@ class HubbardSquareCompiler:
 
         cands = []
         for up_quarters, dn_quarters in itertools.product(range(4), repeat=2):
-            majorana_rotated, majorana_rot_sign = monomial.majorana_c4_rotate(up_quarters, dn_quarters)
+            maj_rotated, maj_rotated_sign = monomial.majorana_c4_rotate(up_quarters, dn_quarters)
 
             for exchange in (False, True):
-                exchanged = majorana_rotated
-                exchange_sign = majorana_rot_sign
+                exchanged = maj_rotated
+                exchanged_sign = maj_rotated_sign
                 if exchange:
-                    exchanged, step_sign = majorana_rotated.spin_exchange()
-                    exchange_sign *= step_sign
+                    exchanged, step_sign = maj_rotated.spin_exchange()
+                    exchanged_sign *= step_sign
 
-                lattice_quarters = range(4) if self.Lx == self.Ly else (0, 2)
-                for quarters in lattice_quarters:
-                    lattice_rotated, lattice_rot_sign = exchanged.lattice_c4_rotate(quarters)
-                    lattice_rot_sign *= exchange_sign
+                lat_quarters = range(4) if self.Lx == self.Ly else (0, 2)
+                for quarters in lat_quarters:
+                    lat_rotated, step_sign = exchanged.lattice_c4_rotate(quarters)
+                    lat_rotated_sign = exchanged_sign * step_sign
 
                     for reflect in (False, True):
-                        cand = lattice_rotated
-                        cand_sign = lattice_rot_sign
+                        lat_reflected = lat_rotated
+                        lat_reflected_sign = lat_rotated_sign
                         if reflect:
-                            cand, step_sign = lattice_rotated.lattice_reflect_x()
-                            cand_sign *= step_sign
+                            lat_reflected, step_sign = lat_rotated.lattice_reflect_x()
+                            lat_reflected_sign *= step_sign
 
-                        cands.append((
-                            cand.trans_canon,
-                            cand_sign * cand.trans_canon_sign,
-                        ))
+                        cand = lat_reflected.trans_canon
+                        cand_sign = lat_reflected_sign * lat_reflected.trans_canon_sign
+                        cands.append((cand, cand_sign))
 
         canon_key = min(cand_key for cand_key, _ in cands)
         signs = {cand_sign for cand_key, cand_sign in cands if cand_key == canon_key}
