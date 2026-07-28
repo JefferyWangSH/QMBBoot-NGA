@@ -33,13 +33,20 @@ Additional model-specific symmetries:
   * spin-resolved $\pi/2$ rotations $C_{4,\uparrow}\times C_{4,\downarrow}$ in the Majorana planes, i.e. a finite Abelian subgroup of $U_\uparrow(1)\times U_\downarrow(1)$, to prune SDP variables
   * spin exchange to prune SDP variables
   * additional symmetries at half-filling on bipartite lattices:
-    * particle-hole symmetry to reduce SDP variables and PSD constraints
+    * particle-hole symmetry to simplify PSD constraints
     * $\eta$-pairing $SU(2)_\eta$ to generate Ward identities
 
 ## Dependencies
 * Python >= 3.13
 * NumPy, SciPy, CVXPY, scikit-sparse, lru-dict
 * (optional) cppimport, pybind11, and a C++20 compiler for JIT
+
+## Usage
+The main entry point is [`main.py`](main.py). For example, start an NGA run with:
+```bash
+python main.py --config config/hubbard.json --output-dir results/ --steps 10
+```
+Example configurations are available in [`config/`](config/). For more details, visit the [wiki](https://deepwiki.com/JefferyWangSH/QMBBoot-NGA) and ask its built-in AI agent.
 
 ## References
 * https://arxiv.org/pdf/2410.00810
