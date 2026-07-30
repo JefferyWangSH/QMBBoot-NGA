@@ -1,8 +1,9 @@
 # QMBBoot-NGA
-* *Nullspace-guided adaptive algorithm of quantum many-body bootstrap (QMBBoot-NGA).*
-* Support computing lower bounds of ground-state energy density and certified lower/upper bounds of observables for PBC lattice models.
-* Utilize symmetries to
-  * expose block structure in PSD moment matrices,
+* *Nullspace-guided adaptive (NGA) algorithm for quantum many-body bootstrap.*
+  * Certify the ground states of periodic lattice models: lower bounds on the energy density and two-sided bounds on general static observables.
+  * Iteratively improve the bounds by refining the bootstrap basis guided by the moment-matrix nullspace.
+* Exploit symmetries to
+  * reveal block-diagonal structure in PSD moment matrices,
   * prune SDP optimization variables,
   * and impose Ward-identity constraints.
 * Use [CVXPY](https://github.com/cvxpy/cvxpy) for solving SDPs.
@@ -10,11 +11,11 @@
 * Enable JIT acceleration for symbolic operator algebra and SDP compilation by setting environment variable `USE_JIT=1` (the default). Set `USE_JIT=0` to use the Python fallback.
 
 ## Models
-Implemented:
-* *Transverse/Longitudinal-field Ising chain*
+The following models are implemented:
+* *Transverse- and longitudinal-field Ising chain*
 * *$J_1$-$J_2$ Heisenberg chain*
 * *Hubbard chain*
-* *Hubbard on square/rectangular lattice*
+* *Hubbard models on square/rectangular lattices*
 
 All these model compilers use:
 * lattice translation symmetry to generate momentum PSD blocks
@@ -23,30 +24,30 @@ All these model compilers use:
 
 Additional model-specific symmetries:
 * *$J_1$-$J_2$ Heisenberg chain*
-  * spin label permutation $S_3$ to prune SDP variables
+  * spin permutation $S_3$ to prune SDP variables
   * spin rotation $SO(3)$ to generate Ward identities
-  * $\pi$-rotation spin subgroup $D_2=C_2\times C_2$ to further split PSD blocks
+  * spin $\pi$-rotation subgroup $D_2\cong C_2\times C_2$ to further split PSD blocks
 * *Hubbard in 1D and 2D*
   * spin-resolved fermion parity $P_\uparrow\times P_\downarrow$ to further split PSD blocks
-  * charge symmetry $U(1)$ to generate Ward identities; fixed total filling number
+  * charge $U(1)$ symmetry to generate Ward identities; fixed total particle number
   * spin rotation $SU(2)$ to generate Ward identities
-  * spin-resolved $\pi/2$ rotations $C_{4,\uparrow}\times C_{4,\downarrow}$ in the Majorana planes, i.e. a finite Abelian subgroup of $U_\uparrow(1)\times U_\downarrow(1)$, to prune SDP variables
+  * spin-resolved $\pi/2$-rotations $C_{4,\uparrow}\times C_{4,\downarrow}$ in the Majorana planes, i.e. a finite Abelian subgroup of $U_\uparrow(1)\times U_\downarrow(1)$, to prune SDP variables
   * spin exchange to prune SDP variables
   * additional symmetries at half-filling on bipartite lattices:
     * particle-hole symmetry to simplify PSD constraints
     * $\eta$-pairing $SU(2)_\eta$ to generate Ward identities
 
 ## Dependencies
-* Python >= 3.13
-* NumPy, SciPy, CVXPY, scikit-sparse, lru-dict
+* python >= 3.13
+* numpy, scipy, cvxpy, scikit-sparse, lru-dict
 * (optional) cppimport, pybind11, and a C++20 compiler for JIT
 
 ## Usage
 The main entry point is [`main.py`](main.py). For example, start an NGA run with:
 ```bash
-python main.py --config config/hubbard.json --output-dir results/ --steps 10
+python main.py --config config/hubbard.json --output-dir results --steps 10
 ```
-Example configurations are available in [`config/`](config/). For more details, visit the [wiki](https://deepwiki.com/JefferyWangSH/QMBBoot-NGA) and ask its built-in AI agent.
+Example configurations are available in [`config/`](config/). For more details, see the [wiki](https://deepwiki.com/JefferyWangSH/QMBBoot-NGA), which also includes a built-in AI agent for help.
 
 ## References
 * https://arxiv.org/pdf/2410.00810
