@@ -72,13 +72,12 @@ class NGARunner:
     '''
         Nullspace-guided adaptive (NGA) runner
 
-        Required model interfaces:
+        The model compiler must provide:
 
             Compiler.trans_canon
             Compiler.trans_canon_rep
             Compiler.block_reprs: list[list[BasisRep]]
-            Compiler.psd_blocks: list[PSDConstraints]
-            Compiler.vars: list
+            Compiler.block_momenta: list[MomentumIndex]
             Compiler.compile(basis_reprs: list[BasisRep]) -> None
             Compiler.sdp_data() -> SDPData
             Compiler.summary() -> dict
@@ -99,13 +98,13 @@ class NGARunner:
 
         # canonical basis reprs (duplication removed)
         self.basis_reprs = []
-        reprs_seen = set()
+        seen_reprs = set()
         for rep in basis_reprs:
             rep = self._canon_rep(rep)
             key = self._canon(rep)
-            if key in reprs_seen:
+            if key in seen_reprs:
                 continue
-            reprs_seen.add(key)
+            seen_reprs.add(key)
             self.basis_reprs.append(rep)
 
         self.basis_indices = {self._canon(rep): idx for idx, rep in enumerate(self.basis_reprs)}
@@ -124,7 +123,7 @@ class NGARunner:
         self.psd_eigvals = []
         self.psd_eigvecs = []
 
-        # small indices have higher priority
+        # lower-index candidates have higher priority
         self.to_drop = []
         self.to_grow = []
         self.drop_counts = {} if drop_counts is None else drop_counts
@@ -183,10 +182,31 @@ class NGARunner:
             self.psd_eigvals.append(eigvals)
             self.psd_eigvecs.append(eigvecs)
 
-    def proposed_prune(self):
+    def propose_pruning(self):
         if not self.psd_eigvals or not self.psd_eigvecs:
             raise ValueError('diagonalize psd blocks first')
         self._update_scheduler()
+
+        r'''
+            A null vector v_{k,\alpha} of M(k) defines
+
+                P_{k,\alpha}
+                    = L^{-1/2} \sum_a \sum_r [v_{k,\alpha}]_a e^{-i k r} T_r O_a
+                    = \sum_{a,r} [v'_{k,\alpha}]_{a,r} T_r O_a,
+
+            with [v'_{k,\alpha}]_{a,r} = L^{-1/2} [v_{k,\alpha}]_a e^{-i k r} the real-space null vector.
+            \alpha enumerates the null vectors of M(k).
+            The leverage of O_a in the moment nullspace is
+
+                l_a = |N_null|^{-1} \sum_{k,\alpha} \sum_r |[v'_{k,\alpha}]_{a,r}|^2,
+
+            so that \sum_a l_a = 1. In terms of momentum-space null vectors,
+            l_a is equivalently computed as
+
+                l_a = |N_null|^{-1} \sum_{k,\alpha} |[v_{k,\alpha}]_a|^2,
+
+            which is implemented as below.
+        '''
 
         leverage = np.zeros(len(self.basis_reprs))
         null_eigvals = []
@@ -200,14 +220,6 @@ class NGARunner:
             if np.count_nonzero(null_mask) == 0:
                 continue
 
-            r'''
-                leverage of operator O_a in the momentum-block nullspace {v_\alpha(k)}
-
-                    l_a(k) = |N_null|^{-1} \sum_\alpha |(v_{k,\alpha})_a|^2
-
-                normalized by inverse of total nullspace dimension |N_null| across blocks
-                such that \sum_k \sum_{a \in B_k} l_a(k) = 1.
-            '''
             block_leverage = np.sum(np.abs(eigvecs[:, null_mask])**2, axis=1)
             null_eigvals.extend(eigvals[null_mask])
             for rep, score in zip(block_reprs, block_leverage):
@@ -230,7 +242,7 @@ class NGARunner:
             if self._canon(rep) not in self.required_basis_keys
             and score < self.nga_params.max_drop_leverage
         ]
-        # sorted by leverages in nullspace (ascending)
+        # sort by increasing nullspace leverage
         cands.sort()
         self.to_drop = [key for _, key in cands[:self.scheduler.drop_cap]]
 
@@ -238,16 +250,64 @@ class NGARunner:
         self.record.max_drop_null_eigval = max_null_eigval
         return self.to_drop
 
-    def proposed_grow(self):
+    def propose_growth(self):
         if not self.psd_eigvals or not self.psd_eigvecs:
             raise ValueError('diagonalize psd blocks first')
 
-        basis_keys = set(self.basis_indices)
         target_growth = len(self.to_drop) + self.scheduler.net_growth_cap
-        self.to_grow = []
 
-        cand_scores = {}
-        cand_reps = {}
+        r'''
+            self.compiler.descendants(rep) calculates
+
+                [H, O_a] = \sum_{b,s} C_{ab}(s) T_s O'_b.
+
+            Therefore, in terms of real-space null vectors,
+
+                (1-\Pi)[H, P_{k,\alpha}]
+                    = \sum_{a,b,r,s} [v'_{k,\alpha}]_{a,r} C_{ab}(s) T_{r+s} O'_b
+                    = \sum_{a,b,r,s} [v'_{k,\alpha}]_{a,r} C_{ab}(s-r) T_s O'_b
+                    = \sum_{b,s} w'_{k,\alpha,b,s} T_s O'_b
+
+            with w'_{k,\alpha,b,s} = \sum_{a,r} [v'_{k,\alpha}]_{a,r} C_{ab}(s-r).
+            O'_b now enumerates the descendants that are missing in the current operator basis.
+            By definition, the growth score is
+
+                s_b = |N_null|^{-1} \sum_{k,\alpha,s} |w'_{k,\alpha,b,s}|^2.
+
+            The code works with the momentum-space null vectors [v_{k,\alpha}]_a so that
+
+                (1-\Pi)[H, P_{k,\alpha}]
+                    = \sum_{a,b,r,s} [v'_{k,\alpha}]_{a,r} C_{ab}(s) T_{r+s} O'_b
+                    = \sum_{a,b,s} [v_{k,\alpha}]_a e^{i k s} C_{ab}(s) O'_b(k).
+
+            Writing [D^k]_{ba} = \sum_s e^{i k s} C_{ab}(s) and [v^k]_{a,\alpha} = [v_{k,\alpha}]_a gives
+
+                (1-\Pi)[H, P_{k,\alpha}]
+                    = \sum_{a,b} [D^k]_{ba} [v^k]_{a,\alpha} O'_b(k)
+                    = \sum_b [D^k @ v^k]_{b,\alpha} O'_b(k).
+
+            where we define
+
+                w_{k,\alpha,b}
+                    = [D^k @ v^k]_{b,\alpha}
+                    = \sum_{a,s} [v_{k,\alpha}]_a e^{i k s} C_{ab}(s)
+
+            and the growth score
+
+                s_b = |N_null|^{-1} \sum_{k,\alpha} |w_{k,\alpha,b}|^2.
+
+            The two scores are identical by noting that
+
+                w'_{k,\alpha,b,s}
+                    = \sum_{a,r} L^{-1/2} [v_{k,\alpha}]_a e^{-i k r} C_{ab}(s-r)
+                    = \sum_{a,r} L^{-1/2} [v_{k,\alpha}]_a e^{-i k (s-r)} C_{ab}(r)
+                    = L^{-1/2} e^{-i k s} w_{k,\alpha,b},
+
+            and \sum_s |w'_{k,\alpha,b,s}|^2 = |w_{k,\alpha,b}|^2.
+        '''
+
+        cand_scores = {} # candidate key to its growth score
+        cand_reps = {}   # candidate key to its operator representative
         null_eigvals = []
 
         for q, block_reprs, eigvals, eigvecs in zip(
@@ -264,59 +324,51 @@ class NGARunner:
             null_eigvecs = eigvecs[:, null_mask]
 
             r'''
-                W_{b,\alpha}(k) = \sum_{s,a} [v_{k,\alpha}]_a C_{ab}(s) e^{iks}
+                sparse descendant matrix [D^k]_{ba} = \sum_s e^{i k s} C_{ab}(s)
+                and self.compiler.descendants(rep) returns
 
-                D_{ba}(k) = \sum_s C_{ab}(s) e^{iks}
+                    [H, O_a(0)] = \sum_{b,s} C_{ab}(s) T_s O'(0)_b
 
-                s.t. W(k) = \sum_a D_{ba}(k) [v(k)]_{a,\alpha} = D(k) @ v(k)
-                and define Score(b) = \sum_{k,\alpha} |W_{b,\alpha}(k)|^2.
+                as a list [(O'(0)_b, s, C_{ab}(s)), ...].
             '''
-            desc_rows = {}
-            desc_keys = []
-            rows = []
-            cols = []
-            data = []
+            desc_keys = [] # descendants keys
+            desc_rows = {} # descendant key to its row index in D^k
+            d_rows = []
+            d_cols = []
+            d_data = []
 
-            r'''
-                sparse descendant matrix D_{ba}(k) = \sum_s C_{ab}(s) e^{iks}
-                self.compiler.descendants(rep) calculates
-
-                    C_a = [H, O_a(0)] = \sum_{b,s} C_{ab}(s) T_s O'(0)_b
-
-                as entry list [(O'(0)_b, s, C_{ab}(s)), ...]
-            '''
-            for a_idx, rep in enumerate(block_reprs):
-                for desc_rep, s, coeff in self.compiler.descendants(rep):
-                    desc_key = self._canon(desc_rep)
-                    if desc_key in basis_keys:
+            for a, op_a in enumerate(block_reprs):
+                for op_b, s, coeff in self.compiler.descendants(op_a):
+                    key = self._canon(op_b)
+                    if key in self.basis_indices:
                         continue
-                    if not self.compiler.nonzero_fourier(desc_rep, q):
+                    if not self.compiler.nonzero_fourier(op_b, q):
                         continue
 
-                    row = desc_rows.get(desc_key)
-                    if row is None:
-                        row = len(desc_keys)
-                        desc_rows[desc_key] = row
-                        desc_keys.append(desc_key)
-                        if desc_key not in cand_reps:
-                            cand_reps[desc_key] = desc_rep
+                    b = desc_rows.get(key)
+                    if b is None:
+                        b = len(desc_keys)
+                        desc_rows[key] = b
+                        desc_keys.append(key)
+                        if key not in cand_reps:
+                            cand_reps[key] = op_b
 
-                    rows.append(row)
-                    cols.append(a_idx)
-                    data.append(coeff * self.compiler.fourier_phase(q, s))
+                    d_rows.append(b)
+                    d_cols.append(a)
+                    d_data.append(coeff * self.compiler.fourier_phase(q, s))
 
-            if not data:
+            if not d_data:
                 continue
 
             D = sp.sparse.coo_matrix(
-                (data, (rows, cols)),
+                (d_data, (d_rows, d_cols)),
                 shape=(len(desc_keys), len(block_reprs)),
             ).tocsr() # implicitly sum over s
             w = D @ null_eigvecs
             block_scores = np.sum(np.abs(w)**2, axis=1)
 
-            for desc_key, score in zip(desc_keys, block_scores):
-                cand_scores[desc_key] = cand_scores.get(desc_key, 0) + float(score)
+            for key, score in zip(desc_keys, block_scores):
+                cand_scores[key] = cand_scores.get(key, 0) + float(score)
 
         null_count = len(null_eigvals)
         if null_count == 0:
@@ -341,16 +393,16 @@ class NGARunner:
 
     def update(self):
         while (
-            len(self.to_grow)-len(self.to_drop) < self.scheduler.net_growth_min
+            len(self.to_grow) - len(self.to_drop) < self.scheduler.net_growth_min
             and self.to_drop
         ):
-            # pop from the right (lowest priority)
+            # pop those with lowest priority from the end
             self.to_drop.pop()
 
-        to_drop_set = set(self.to_drop)
-        for key in to_drop_set:
+        to_drop = set(self.to_drop)
+        for key in to_drop:
             self.drop_counts[key] = self.drop_counts.get(key, 0) + 1
-        self.basis_reprs = [rep for rep in self.basis_reprs if self._canon(rep) not in to_drop_set]
+        self.basis_reprs = [rep for rep in self.basis_reprs if self._canon(rep) not in to_drop]
         self.basis_reprs.extend(self.to_grow)
         self.basis_indices = {self._canon(rep): idx for idx, rep in enumerate(self.basis_reprs)}
 
@@ -365,8 +417,8 @@ class NGARunner:
         summary = self.compiler.summary()
         self.solve()
         self.diagonalize()
-        self.proposed_prune()
-        self.proposed_grow()
+        self.propose_pruning()
+        self.propose_growth()
         self.update()
         return summary, self.history[-1]
 
@@ -394,7 +446,7 @@ if __name__ == '__main__':
             net_growth_min=1,
             net_growth_cap=4,
             drop_cap=4,
-            reentry_penalty=0.5,
+            reentry_penalty=.5,
         ),
     )
 
@@ -405,7 +457,7 @@ if __name__ == '__main__':
 
         runner.solve()
         runner.diagonalize()
-        runner.proposed_prune()
-        runner.proposed_grow()
+        runner.propose_pruning()
+        runner.propose_growth()
         runner.update()
         print(i, runner.history[-1])
