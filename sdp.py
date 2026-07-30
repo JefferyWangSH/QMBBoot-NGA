@@ -200,7 +200,7 @@ class SDPSolver:
                 expr = cp.real(expr)
             self.constraints.append(expr >= 0)
 
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ uncertified observable estimates
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ uncertified observables
         self.observables = {}
         for name, obs in data.observables.items():
             if isinstance(obs, list):

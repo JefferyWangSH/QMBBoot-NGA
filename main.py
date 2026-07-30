@@ -33,12 +33,12 @@ class ModelAdapter:
         if obj_sense not in ('min', 'max'):
             raise ValueError(f'unknown objective sense: {obj_sense}')
         if obj_name == 'hamil' and obj_sense != 'min':
-            raise ValueError('Hamiltonian objective only supports min')
+            raise ValueError("Hamiltonian objective requires obj_sense='min'")
 
         e_lb = obj_config.get('e_lb')
         e_ub = obj_config.get('e_ub')
         if obj_name == 'hamil' and (e_lb is not None or e_ub is not None):
-            raise ValueError('Hamiltonian objective does not use energy bounds e_lb or e_ub')
+            raise ValueError('e_lb and e_ub are only valid for non-Hamiltonian objectives')
         if obj_name != 'hamil' and (e_lb is None or e_ub is None):
             raise ValueError('observable objective requires energy bounds e_lb and e_ub')
 
@@ -222,6 +222,7 @@ class ModelAdapter:
             resume_state = Path(resume) / 'state.json'
             resume_basis = Path(resume) / 'basis.json'
             resume_events = Path(resume) / 'events.json'
+
             state = json.loads(resume_state.read_text())
             if state['model_type'] != model_type or state['model'] != asdict(model_params):
                 raise ValueError('resume state model parameters do not match config')
@@ -229,17 +230,23 @@ class ModelAdapter:
             start_step = state.get('step', -1) + 1
             records = state.get('records', [])
             events = json.loads(resume_events.read_text()) if resume_events.exists() else {'steps': []}
+
+            # restore the drop counts
             drop_counts = {}
-            for step_event in events.get('steps', []):
-                for rep in build_basis(step_event.get('drop', [])):
+            for event in events.get('steps', []):
+                for rep in build_basis(event.get('drop', [])):
                     key = rep.trans_canon
                     drop_counts[key] = drop_counts.get(key, 0) + 1
+
             # apply the last move
             if events.get('steps'):
+                last_move = events['steps'][-1]
+                to_drop = build_basis(last_move.get('drop', []))
+                to_grow = build_basis(last_move.get('grow', []))
                 basis_map = {rep.trans_canon: rep.trans_canon_rep for rep in basis}
-                for rep in build_basis(events['steps'][-1].get('drop', [])):
+                for rep in to_drop:
                     basis_map.pop(rep.trans_canon, None)
-                for rep in build_basis(events['steps'][-1].get('grow', [])):
+                for rep in to_grow:
                     basis_map[rep.trans_canon] = rep.trans_canon_rep
                 basis = list(basis_map.values())
         else:
@@ -294,12 +301,15 @@ def redirect_log(log):
 
 if __name__ == '__main__':
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=Path, default=Path('config/hubbard.json'))
-    parser.add_argument('--output-dir', type=Path, default=Path('.'))
-    parser.add_argument('--resume', type=Path, default=None)
-    parser.add_argument('--steps', type=int, default=10)
-    parser.add_argument('--verbose', action='store_true')
+    parser = argparse.ArgumentParser(
+        description='Nullspace-guided adaptive (NGA) bootstrap of finite-size many-body systems.',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument('--config', type=Path, default=Path('config/hubbard.json'), help='JSON configuration file')
+    parser.add_argument('--output-dir', type=Path, default=Path('.'), help='output directory')
+    parser.add_argument('--resume', type=Path, default=None, help='resume from a previous run directory')
+    parser.add_argument('--steps', type=int, default=10, help='NGA steps')
+    parser.add_argument('--verbose', action='store_true', help='write verbose solver output to <output-dir>/solver.log')
     args = parser.parse_args()
 
     adapter = ModelAdapter.load(args.config, args.resume)

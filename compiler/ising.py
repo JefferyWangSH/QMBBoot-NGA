@@ -151,9 +151,9 @@ class IsingCompiler:
             self.e_ub = e_ub
         else:
             if self.obj_sense != 'min':
-                raise ValueError('Hamiltonian objective only supports min')
+                raise ValueError("Hamiltonian objective requires obj_sense='min'")
             if e_lb is not None or e_ub is not None:
-                raise ValueError('Hamiltonian objective does not use energy bounds e_lb or e_ub')
+                raise ValueError('e_lb and e_ub are only valid for non-Hamiltonian objectives')
             self.e_lb = None
             self.e_ub = None
 
