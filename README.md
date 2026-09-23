@@ -1,5 +1,5 @@
 # QMBBoot-NGA
-* *Nullspace-guided adaptive (NGA) algorithm for quantum many-body bootstrap.*
+* *Nullspace-guided adaptive (NGA) algorithm for quantum many-body bootstrap ([arXiv:2609.25834](https://arxiv.org/abs/2609.25834)).*
   * Certify the ground states of periodic lattice models: lower bounds on the energy density and two-sided bounds on general static observables.
   * Iteratively improve the bounds by refining the bootstrap basis guided by the moment-matrix nullspace.
 * Exploit symmetries to
@@ -47,7 +47,7 @@ The main entry point is [`main.py`](main.py). For example, start an NGA run with
 ```bash
 python main.py --config config/hubbard.json --output-dir results --steps 10
 ```
-Example configurations are available in [`config/`](config/). For more details, see the [wiki](https://deepwiki.com/JefferyWangSH/QMBBoot-NGA), which also includes a built-in AI agent for help.
+Example configurations are available in [`config/`](config/). For more details, see the [wiki](https://deepwiki.com/JefferyWangSH/QMBBoot-NGA), which also includes a built-in AI agent to play with.
 
 ## References
 * https://arxiv.org/pdf/2410.00810
