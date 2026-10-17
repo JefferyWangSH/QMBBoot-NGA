@@ -127,6 +127,7 @@ class HubbardSquareCompiler:
     basis_reprs: list[MajoranaMonomialSquare]
     block_reprs: list[list[MajoranaMonomialSquare]]
     block_momenta: list[tuple[int, int]]
+    block_keys: list[tuple[tuple[int, int], tuple[int, int], int | None]]
 
     var_cpx: bool = False
     var_index: dict[int, int]
@@ -381,6 +382,7 @@ class HubbardSquareCompiler:
     def _build_block_reprs(self):
         self.block_reprs = []
         self.block_momenta = []
+        self.block_keys = [] # symmetry sector (q, fermion parity, particle-hole parity or None)
         for nx in range(self.Lx):
             for ny in range(self.Ly):
                 # complex-conjugation K symmetry makes k and -k equivalent
@@ -414,15 +416,22 @@ class HubbardSquareCompiler:
                         for ph_parity in sorted(ph_parity_reprs):
                             self.block_reprs.append(ph_parity_reprs[ph_parity])
                             self.block_momenta.append(q)
+                            self.block_keys.append((q, f_parity, ph_parity))
                     else:
                         self.block_reprs.append(f_parity_reprs[f_parity])
                         self.block_momenta.append(q)
+                        self.block_keys.append((q, f_parity, None))
 
     def _build_psd(self):
         self.psd_blocks = []
 
-        for q, block_basis in zip(self.block_momenta, self.block_reprs):
-            psd = PSDConstraints(n_vars=len(self.vars), dim=len(block_basis))
+        for q, block_key, block_basis in zip(self.block_momenta, self.block_keys, self.block_reprs):
+            psd = PSDConstraints(
+                n_vars=len(self.vars),
+                dim=len(block_basis),
+                block_key=block_key,
+                row_keys=[self.trans_canon(monomial) for monomial in block_basis],
+            )
 
             for row, monomial1 in enumerate(block_basis):
                 for col, monomial2 in enumerate(block_basis):
@@ -919,6 +928,7 @@ class HubbardSquareCompiler:
             affines_mat=self.affines_mat,
             observables=self.obs_exprs,
             energy_ineqs=self.energy_ineqs,
+            var_keys=sorted(self.var_index, key=self.var_index.get),
         )
 
     def clone(self):

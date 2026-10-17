@@ -66,6 +66,7 @@ class HeisenbergCompiler:
     # we divide PSD blocks using translation and pi-angle spin-rotation symmetry
     block_reprs: list[list[PauliString]]
     block_momenta: list[int]
+    block_keys: list[tuple[int, int]]
     psd_blocks: list[PSDConstraints]
 
     affines: AffineConstraints
@@ -215,6 +216,7 @@ class HeisenbergCompiler:
     def _build_block_reprs(self):
         self.block_reprs = []
         self.block_momenta = []
+        self.block_keys = [] # symmetry sector (q, pi-rotation charge)
 
         for q in range(self.L//2 + 1): # K symmetry
             charge_reprs = {}
@@ -227,12 +229,18 @@ class HeisenbergCompiler:
             for charge in sorted(charge_reprs):
                 self.block_reprs.append(charge_reprs[charge])
                 self.block_momenta.append(q)
+                self.block_keys.append((q, charge))
 
     def _build_psd(self):
         self.psd_blocks = []
 
-        for q, block_basis in zip(self.block_momenta, self.block_reprs):
-            psd = PSDConstraints(n_vars=len(self.vars), dim=len(block_basis))
+        for q, block_key, block_basis in zip(self.block_momenta, self.block_keys, self.block_reprs):
+            psd = PSDConstraints(
+                n_vars=len(self.vars),
+                dim=len(block_basis),
+                block_key=block_key,
+                row_keys=[self.trans_canon(pstr) for pstr in block_basis],
+            )
 
             for row, pstr1 in enumerate(block_basis):
                 for col, pstr2 in enumerate(block_basis):
@@ -601,6 +609,7 @@ class HeisenbergCompiler:
             affines_mat = self.affines_mat,
             observables = self.obs_exprs,
             energy_ineqs = self.energy_ineqs,
+            var_keys = sorted(self.var_index, key=self.var_index.get),
         )
 
     def clone(self):

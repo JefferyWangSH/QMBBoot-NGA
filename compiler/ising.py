@@ -72,6 +72,7 @@ class IsingCompiler:
         ward_ops:      number of Ward-identity operators O used to generate constraints
         block_reprs:   representative basis involved in each momentum PSD block
         block_momenta: momentum index to which each PSD block corresponds
+        block_keys:    symmetry sector identifying each PSD block across compilations
         psd_blocks:    momentum PSD blocks
         affines:       affine constraints
         affines_mat:   affine constraints in terms of a sparse matrix
@@ -83,6 +84,7 @@ class IsingCompiler:
 
     block_reprs: list[list[PauliString]]
     block_momenta: list[int]
+    block_keys: list[int]
     psd_blocks: list[PSDConstraints]
 
     affines: AffineConstraints
@@ -244,12 +246,14 @@ class IsingCompiler:
         '''
         self.block_reprs = []
         self.block_momenta = []
+        self.block_keys = [] # symmetry sector q
         for q in range(self.L//2 + 1):
             self.block_reprs.append([
                 pstr for pstr in self.basis_reprs
                 if self.nonzero_fourier(pstr, q)
             ])
             self.block_momenta.append(q)
+            self.block_keys.append(q)
 
     def _build_psd(self):
         '''
@@ -261,8 +265,13 @@ class IsingCompiler:
             K symmetry imposes that M(-k) = diag(eta) M(k)^\ast diag(eta)
             therefore the number of independent momentum PSD blocks can be reduced by half
         '''
-        for q, block_basis in zip(self.block_momenta, self.block_reprs):
-            psd = PSDConstraints(n_vars=len(self.vars), dim=len(block_basis))
+        for q, block_key, block_basis in zip(self.block_momenta, self.block_keys, self.block_reprs):
+            psd = PSDConstraints(
+                n_vars=len(self.vars),
+                dim=len(block_basis),
+                block_key=block_key,
+                row_keys=[self.trans_canon(pstr) for pstr in block_basis],
+            )
 
             for row, pstr1 in enumerate(block_basis):
                 for col, pstr2 in enumerate(block_basis):
@@ -552,6 +561,7 @@ class IsingCompiler:
             affines_mat = self.affines_mat,
             observables = self.obs_exprs,
             energy_ineqs = self.energy_ineqs,
+            var_keys = sorted(self.var_index, key=self.var_index.get),
         )
 
     def clone(self):

@@ -70,6 +70,12 @@ class PSDConstraints:
         M >= 0 <=> R >= 0. None means no phase is given and M is used as it is.
         Only diagonal D is considered, because a general unitary transformation
         makes the affine map of R dense.
+
+        block_key and row_keys (optional, set by the compiler) identify blocks and rows across SDPData:
+            block_key: symmetry sector of the block (e.g. (momentum, parities)), unique within an SDPData;
+            row_keys:  key of the basis operator of each row, unique within the block.
+        In two SDPData, entries between rows of equal keys in blocks of equal keys are the same
+        affine maps of variables of equal keys (see SDPData.var_keys). None means not given.
     '''
     n_vars: int
     dim: int
@@ -85,6 +91,11 @@ class PSDConstraints:
 
     # exponents phi_i of the diagonal phase D = diag(i^{phi_i}) making D^H M D real
     realify_phase: list[int] | None = None
+
+    # symmetry sector of the block, unique within an SDPData,
+    # and basis operator (string / monomial) key of each row, unique within the block
+    block_key: object = None
+    row_keys: list | None = None
 
     def add(self, i: int, j: int, expr: LinearExpr):
         idx = i + j * self.dim
@@ -185,6 +196,10 @@ class SDPData:
     observables: dict[str, LinearExpr | list[LinearExpr]]
     energy_ineqs: list[LinearExpr]
 
+    # optional (set by the compiler): hashable key of each variable;
+    # the same key in two SDPData means the same moment variable. None means no key is given.
+    var_keys: list | None = None
+
 
 class SDPSolver:
     def __init__(self):
@@ -265,9 +280,15 @@ class SDPSolver:
         self.problem = cp.Problem(self.objective, self.constraints)
         return self.problem
 
-    def solve(self, backend: str = 'SCS', **kwargs):
+    def solve(self, backend: str = 'SCS', warm_start: dict | None = None, **kwargs):
+        '''
+            warm_start is currently not supported through cvxpy,
+            accepted for interface compatibility with ScsSDPSolver.solve.
+        '''
         if self.problem is None:
             raise ValueError('problem has not been built')
+        if warm_start:
+            raise NotImplementedError('SDPSolver does not support warm_start; use ScsSDPSolver')
         value = self.problem.solve(solver=backend, **kwargs)
         self.status = self.problem.status
         return value
@@ -334,14 +355,20 @@ class ScsSDPSolver:
         self.scs_output = self.status = None
         return self.problem
 
-    def solve(self, backend: str | None = None, **kwargs):
+    def solve(self, backend: str | None = None, warm_start: dict | None = None, **kwargs):
         '''
             `backend` is ignored (interface compatibility). kwargs are SCS settings, translated
             as cvxpy does: eps -> eps_abs = eps_rel = eps; default eps_abs = eps_rel = 1e-5.
+
+            warm_start: export_warm() of a previous solution (possibly of another SDPData),
+            mapped onto the built problem by the keys (see _import_warm);
+            None for a cold start. SCS's scale is not carried over.
         '''
         import scs
         if self.problem is None:
             raise ValueError('problem has not been built')
+        if warm_start is not None and not isinstance(warm_start, dict):
+            raise TypeError(f'warm_start must be the dict from export_warm(), got {type(warm_start).__name__}')
         opts = dict(kwargs)
         if 'eps' in opts:
             opts['eps_abs'] = opts['eps_rel'] = opts.pop('eps')
@@ -351,7 +378,12 @@ class ScsSDPSolver:
         opts.setdefault('adaptive_diag_scale', 0)  # SCS >= 3.3: ~10x slower with real PSD blocks
 
         scs_data, cone, layout = self.problem
-        self.scs_output = scs.SCS(scs_data, cone, **opts).solve()
+        solver = scs.SCS(scs_data, cone, **opts)
+        if warm_start is None:
+            self.scs_output = solver.solve(warm_start=False)
+        else:
+            x, y, s = self._import_warm(warm_start)
+            self.scs_output = solver.solve(warm_start=True, x=x, y=y, s=s)
         info = self.scs_output['info']
         self.status = self.STATUS.get(info['status_val'], 'solver_error')
         if self.status == 'solver_error':
@@ -405,6 +437,86 @@ class ScsSDPSolver:
             'solve_time': info['solve_time'] / 1000,
             'num_iters': info['iter'],
         }
+
+    r'''
+        PSD block vectorization as in SCS: vec(X) is column-major (idx = i + j d), and the lower
+        triangle is ordered by column, off-diagonal entries scaled by sqrt(2):
+
+            svec(X) = T vec(X)                              = svec(Sym X),   d (d+1) / 2 rows
+            cvec(X) = T_re Re vec(X) + T_im Im vec(X)       = cvec(Herm X),  d^2 rows,
+                      off-diagonal (sqrt(2) Re H_ij, sqrt(2) Im H_ij)
+
+        smat and cmat are the adjoint maps T^T and T_re^T + i T_im^T, which invert svec and cvec
+        on symmetric and Hermitian matrices: svec(smat(u)) = u, cvec(cmat(u)) = u, and
+        <smat(u), X> = u^T svec(X), Re <cmat(u), X> = u^T cvec(X).
+    '''
+
+    @staticmethod
+    def _svec_map(d):
+        # real map T (d(d+1)/2 x d^2)
+        jj, ii = np.triu_indices(d)                 # (j, i) with i >= j, ordered by column j then i
+        ij = ii + jj * d
+        ji = jj + ii * d
+        diag = ii == jj
+        od = ~diag
+        rows = np.arange(len(ii))
+        h = 1. / np.sqrt(2.)
+        t_rows = np.concatenate([rows[diag], rows[od], rows[od]])
+        t_cols = np.concatenate([ij[diag], ij[od], ji[od]])
+        t_vals = np.concatenate([np.ones(diag.sum()), np.full(od.sum(), h), np.full(od.sum(), h)])
+        return sp.sparse.csr_matrix((t_vals, (t_rows, t_cols)), shape=(len(ii), d * d))
+
+    @staticmethod
+    def _cvec_maps(d):
+        # real maps T_re, T_im (d^2 x d^2)
+        jj, ii = np.triu_indices(d)                # (j, i) with i >= j, ordered by column j then i
+        ij = ii + jj * d                           # vec index of M_ij (lower)
+        ji = jj + ii * d                           # vec index of M_ji (upper)
+        diag = ii == jj
+        # output row of each lower entry: diag -> 1 row, off-diag -> 2 rows (Re, Im)
+        width = np.where(diag, 1, 2)
+        start = np.concatenate([[0], np.cumsum(width)[:-1]])
+        h = 1. / np.sqrt(2.)
+        od = ~diag
+        re_rows = np.concatenate([start[diag], start[od], start[od]])
+        re_cols = np.concatenate([ij[diag], ij[od], ji[od]])
+        re_vals = np.concatenate([np.ones(diag.sum()), np.full(od.sum(), h), np.full(od.sum(), h)])
+        im_rows = np.concatenate([start[od] + 1, start[od] + 1])
+        im_cols = np.concatenate([ij[od], ji[od]])
+        im_vals = np.concatenate([np.full(od.sum(), h), np.full(od.sum(), -h)])
+        T_re = sp.sparse.csr_matrix((re_vals, (re_rows, re_cols)), shape=(d * d, d * d))
+        T_im = sp.sparse.csr_matrix((im_vals, (im_rows, im_cols)), shape=(d * d, d * d))
+        return T_re, T_im
+
+    @staticmethod
+    def _svec(v, d):
+        '''
+            svec(Sym X) from real v = vec(X) of shape (d^2,) or (d^2, k), dense or sparse
+        '''
+        return ScsSDPSolver._svec_map(d) @ v
+
+    @staticmethod
+    def _cvec(v, d):
+        '''
+            cvec(Herm X) from v = vec(X) of shape (d^2,) or (d^2, k), dense or sparse
+        '''
+        T_re, T_im = ScsSDPSolver._cvec_maps(d)
+        return T_re @ v.real + T_im @ v.imag
+
+    @staticmethod
+    def _smat(u, d):
+        '''
+            real symmetric (d, d) matrix X with svec(X) = u
+        '''
+        return (ScsSDPSolver._svec_map(d).T @ u).reshape((d, d), order='F')
+
+    @staticmethod
+    def _cmat(u, d):
+        '''
+            Hermitian (d, d) matrix X with cvec(X) = u
+        '''
+        T_re, T_im = ScsSDPSolver._cvec_maps(d)
+        return (T_re.T @ u + 1j * (T_im.T @ u)).reshape((d, d), order='F')
 
     @staticmethod
     def _to_scs(data: SDPData, herm_tol: float = 1e-12):
@@ -487,42 +599,6 @@ class ScsSDPSolver:
             b_parts.append(b_l)
 
         # ---- PSD cones
-        def sym_svec_map(d):
-            # real map T (d(d+1)/2 x d^2) with svec(Sym(X)) = T vec(X), vec in column-major order
-            jj, ii = np.triu_indices(d)                 # (j, i) with i >= j, ordered by column j then i
-            ij = ii + jj * d
-            ji = jj + ii * d
-            diag = ii == jj
-            od = ~diag
-            rows = np.arange(len(ii))
-            h = 1. / np.sqrt(2.)
-            t_rows = np.concatenate([rows[diag], rows[od], rows[od]])
-            t_cols = np.concatenate([ij[diag], ij[od], ji[od]])
-            t_vals = np.concatenate([np.ones(diag.sum()), np.full(od.sum(), h), np.full(od.sum(), h)])
-            return sp.sparse.csr_matrix((t_vals, (t_rows, t_cols)), shape=(len(ii), d * d))
-
-        def herm_cvec_maps(d):
-            # real maps T_re, T_im (d^2 x d^2) with cvec(Herm(M)) = T_re Re vec(M) + T_im Im vec(M),
-            # vec in column-major order (idx = i + j d), cvec as in SCS (lower triangle by column)
-            jj, ii = np.triu_indices(d)                 # (j, i) with i >= j, ordered by column j then i
-            ij = ii + jj * d                           # vec index of M_ij (lower)
-            ji = jj + ii * d                           # vec index of M_ji (upper)
-            diag = ii == jj
-            # output row of each lower entry: diag -> 1 row, off-diag -> 2 rows (Re, Im)
-            width = np.where(diag, 1, 2)
-            start = np.concatenate([[0], np.cumsum(width)[:-1]])
-            h = 1. / np.sqrt(2.)
-            od = ~diag
-            re_rows = np.concatenate([start[diag], start[od], start[od]])
-            re_cols = np.concatenate([ij[diag], ij[od], ji[od]])
-            re_vals = np.concatenate([np.ones(diag.sum()), np.full(od.sum(), h), np.full(od.sum(), h)])
-            im_rows = np.concatenate([start[od] + 1, start[od] + 1])
-            im_cols = np.concatenate([ij[od], ji[od]])
-            im_vals = np.concatenate([np.full(od.sum(), h), np.full(od.sum(), -h)])
-            T_re = sp.sparse.csr_matrix((re_vals, (re_rows, re_cols)), shape=(d * d, d * d))
-            T_im = sp.sparse.csr_matrix((im_vals, (im_rows, im_cols)), shape=(d * d, d * d))
-            return T_re, T_im
-
         psd_parts = {'s': [], 'cs': []}            # per cone: (k, A rows, b rows)
         n_blocks = len(data.psd_blocks)
         block_cones, block_dims, herm_err = [None] * n_blocks, [None] * n_blocks, [None] * n_blocks
@@ -546,15 +622,11 @@ class ScsSDPSolver:
             block_dims[k] = d
 
             if np.all(A_k.data.imag == 0) and np.all(C_k.imag == 0):
-                T = sym_svec_map(d)
                 block_cones[k] = 's'
-                psd_parts['s'].append((k, -(T @ sp.sparse.csr_matrix(A_k.real)), T @ C_k.real))
+                psd_parts['s'].append((k, -ScsSDPSolver._svec(A_k.real, d), ScsSDPSolver._svec(C_k.real, d)))
             else:
-                T_re, T_im = herm_cvec_maps(d)
                 block_cones[k] = 'cs'
-                psd_parts['cs'].append((k, -(T_re @ sp.sparse.csr_matrix(A_k.real)
-                                             + T_im @ sp.sparse.csr_matrix(A_k.imag)),
-                                        T_re @ C_k.real + T_im @ C_k.imag))
+                psd_parts['cs'].append((k, -ScsSDPSolver._cvec(A_k, d), ScsSDPSolver._cvec(C_k, d)))
 
         # real PSD cones before complex PSD cones (SCS cone order)
         block_offsets = [None] * n_blocks
@@ -591,6 +663,126 @@ class ScsSDPSolver:
             'herm_err': herm_err,
         }
         return scs_data, cone, layout
+
+    def export_warm(self) -> dict:
+        '''
+            basis-independent warm start of the current solution, keyed by the compiler keys
+            (SDPData.var_keys, PSDConstraints.block_key and row_keys):
+
+                x:      {var key: x_i}
+                y_l:    energy-window duals, shape (n_l,)
+                y_psd:  {block_key: (row_keys, Y)},  Y = D Y_X D^H the PSD dual in the M basis,
+                        with Y_X the dual of the cone matrix X (R = D^H M D, or M with D = I)
+
+            Not exported: s (recomputed from x), zero-cone duals (rows selected by SPQR
+            differ between problems), and SCS's adapted scale.
+            Raises ValueError without a solution or without the keys.
+        '''
+        if self.status not in self.SOLVED:
+            raise ValueError(f'no solution available (status: {self.status})')
+        data = self.data
+        if data.var_keys is None or len(data.var_keys) != data.n_vars:
+            raise ValueError('export_warm: SDPData.var_keys is not set (one key per variable)')
+        if len(set(data.var_keys)) != data.n_vars:
+            raise ValueError('export_warm: SDPData.var_keys are not unique')
+
+        _, cone, layout = self.problem
+        y = self.scs_output['y']
+        n_z, n_l = cone['z'], cone['l']
+
+        y_psd = {}
+        for k, block in enumerate(data.psd_blocks):
+            if block.block_key is None or block.row_keys is None:
+                raise ValueError(f'export_warm: PSD block {k} has no block_key or row_keys')
+            if block.block_key in y_psd:
+                raise ValueError(f'export_warm: PSD block key {block.block_key!r} is not unique')
+            if len(block.row_keys) != block.dim or len(set(block.row_keys)) != block.dim:
+                raise ValueError(f'export_warm: PSD block {k} needs {block.dim} unique row_keys')
+
+            d, off = block.dim, layout['block_offsets'][k]
+            if layout['block_cones'][k] == 's':
+                Y = self._smat(y[off:off + d * (d + 1) // 2], d)
+            else:
+                Y = self._cmat(y[off:off + d * d], d)
+            if block.realify_phase is not None:
+                # Y_M = D Y_R D^H, D = diag(i^phi) with exact powers of i
+                w = np.array([1, 1j, -1, -1j])[np.mod(block.realify_phase, 4)]
+                Y = w[:, None] * Y * w.conj()[None, :]
+            y_psd[block.block_key] = (list(block.row_keys), Y)
+
+        return {
+            'x': dict(zip(data.var_keys, self.scs_output['x'].tolist())),
+            'y_l': y[n_z:n_z + n_l].copy(),
+            'y_psd': y_psd,
+        }
+
+    def _import_warm(self, warm: dict):
+        '''
+            SCS warm start (x, y, s) on the built problem from export_warm() of a previous solution
+            (possibly of another SDPData), matched by the keys:
+
+                x: shared variables copied, new variables 0
+                y: zero cone 0; energy window copied if of the same size, else 0;
+                   PSD block: principal submatrix of the old dual Y (same block_key) on the shared rows,
+                   zero for new rows and new blocks, then Y_X = D^H Y D (real part in cone s)
+                s: Pi_K(b - A x), the s in K closest to b - A x (smallest primal residual for x):
+                   zero cone 0; energy window max(b - A x, 0); PSD block Proj_PSD(Herm X(x))
+
+            y and s lie in the dual and primal cone respectively.
+        '''
+        if self.problem is None:
+            raise ValueError('problem has not been built')
+        data = self.data
+        if data.var_keys is None or len(data.var_keys) != data.n_vars:
+            raise ValueError('_import_warm: SDPData.var_keys is not set (one key per variable)')
+
+        scs_data, cone, layout = self.problem
+        n_z, n_l = cone['z'], cone['l']
+
+        x = np.array([warm['x'].get(key, 0.) for key in data.var_keys], dtype=float)
+        r = scs_data['b'] - scs_data['A'] @ x       # vec_K(Herm X(x)) on the PSD rows
+        y = np.zeros_like(r)
+        s = np.zeros_like(r)
+
+        if len(warm['y_l']) == n_l:
+            y[n_z:n_z + n_l] = warm['y_l']
+        s[n_z:n_z + n_l] = np.maximum(r[n_z:n_z + n_l], 0.)
+
+        for k, block in enumerate(data.psd_blocks):
+            if block.block_key is None or block.row_keys is None or len(block.row_keys) != block.dim:
+                raise ValueError(f'_import_warm: PSD block {k} has no block_key or row_keys')
+            d, off = block.dim, layout['block_offsets'][k]
+            real = layout['block_cones'][k] == 's'
+            rows = slice(off, off + (d * (d + 1) // 2 if real else d * d))
+
+            # y: old dual (M basis) on the shared rows, zero for new rows
+            Y = np.zeros((d, d), dtype=complex)
+            old = warm['y_psd'].get(block.block_key)
+            if old is not None:
+                old_keys, Y_old = old
+                pos = {key: i for i, key in enumerate(old_keys)}
+                new_idx = [a for a, key in enumerate(block.row_keys) if key in pos]
+                if new_idx:
+                    old_idx = [pos[block.row_keys[a]] for a in new_idx]
+                    Y[np.ix_(new_idx, new_idx)] = Y_old[np.ix_(old_idx, old_idx)]
+            if block.realify_phase is not None:
+                # Y_R = D^H Y_M D, D = diag(i^phi) with exact powers of i
+                w = np.array([1, 1j, -1, -1j])[np.mod(block.realify_phase, 4)]
+                Y = w.conj()[:, None] * Y * w[None, :]
+
+            # s: projection of Herm X(x) onto the PSD cone
+            H = self._smat(r[rows], d) if real else self._cmat(r[rows], d)
+            lam, V = np.linalg.eigh(H)
+            S = (V * np.maximum(lam, 0.)) @ V.conj().T
+
+            if real:
+                y[rows] = self._svec(Y.real.reshape(-1, order='F'), d)
+                s[rows] = self._svec(S.real.reshape(-1, order='F'), d)
+            else:
+                y[rows] = self._cvec(Y.reshape(-1, order='F'), d)
+                s[rows] = self._cvec(S.reshape(-1, order='F'), d)
+
+        return x, y, s
 
 
 if __name__ == '__main__':

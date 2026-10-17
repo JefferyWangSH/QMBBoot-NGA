@@ -4,8 +4,6 @@ import time
 import numpy as np
 import scipy as sp
 
-from sdp import SDPSolver
-
 @dataclass(slots=True)
 class NGAParams:
     solver_backend: str = 'MOSEK'
@@ -13,6 +11,7 @@ class NGAParams:
     drop_null_tol: float = 1e-9
     grow_null_tol: float = 1e-9
     max_drop_leverage: float = 1e-2
+    warm_start: bool = False
 
     def to_dict(self):
         return {
@@ -21,6 +20,7 @@ class NGAParams:
             'drop_null_tol': self.drop_null_tol,
             'grow_null_tol': self.grow_null_tol,
             'max_drop_leverage': self.max_drop_leverage,
+            'warm_start': self.warm_start,
         }
 
 @dataclass(slots=True)
@@ -29,6 +29,8 @@ class NGARecord:
     objective_sense: str | None = None
     observables: dict | None = None
     status: str | None = None
+    n_iters: int | None = None
+    warm_start: bool | None = None
     basis_reps: int | None = None
     psd_dims: list[int] | None = None
     n_vars: int | None = None
@@ -116,7 +118,15 @@ class NGARunner:
         self.scheduler = scheduler
         self.nga_params = nga_params
 
-        self.solver = SDPSolver()
+        if nga_params.warm_start and nga_params.solver_backend != 'SCS_SSNAL':
+            raise ValueError(f'warm_start is not supported by solver backend {nga_params.solver_backend}')
+        if nga_params.solver_backend == 'SCS_SSNAL':
+            from sdp import ScsSDPSolver
+            self.solver = ScsSDPSolver()
+        else:
+            from sdp import SDPSolver
+            self.solver = SDPSolver()
+        self.warm_data = None # export_warm() of the previous solution
         self._reset_record()
         self.history = []
 
@@ -163,6 +173,7 @@ class NGARunner:
         start = time.perf_counter()
         self.solver.solve(
             backend=self.nga_params.solver_backend,
+            warm_start=self.warm_data,
             **self.nga_params.solver_kwargs,
         )
         self.record.time['solve_time'] = time.perf_counter() - start
@@ -172,6 +183,12 @@ class NGARunner:
         self.record.objective_sense = summary['objective_sense']
         self.record.observables = summary['observables']
         self.record.status = summary['status']
+        self.record.n_iters = summary['num_iters']
+        self.record.warm_start = self.warm_data is not None
+
+        # keep the last solution as the warm data of the next step
+        if self.nga_params.warm_start and self.solver.status in ('optimal', 'optimal_inaccurate'):
+            self.warm_data = self.solver.export_warm()
 
     def diagonalize(self):
         self.psd_eigvals = []
