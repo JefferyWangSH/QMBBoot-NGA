@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-import cvxpy as cp
 import numpy as np
 import scipy as sp
 import sksparse.spqr as spqr
@@ -12,7 +11,13 @@ class LinearExpr:
     terms: dict[int, float|complex] = field(default_factory=dict)
     const: float|complex = 0
 
-    def to_real(self) -> list['LinearExpr']:
+    def realify(self) -> list['LinearExpr']:
+        r'''
+            realification of the equation \sum_k c_k m_k + c_0 = 0: returns the non-empty real and
+            imaginary parts \sum_k Re(c_k) m_k + Re(c_0) and \sum_k Im(c_k) m_k + Im(c_0) as real LinearExprs.
+
+            assumes real moment variables m_k (var_cpx = False).
+        '''
         real_terms = {}
         imag_terms = {}
         for idx, coeff in self.terms.items():
@@ -56,6 +61,15 @@ class PSDConstraints:
         each entry M_{ij} involves ~L number of vars (through fourier transformation);
         this leads to roughly ~ (dim^2 * L) number of non-zero entries in A_{ij,k}
         and a quite sparse density ~ (L / n_vars).
+
+        realify_phase (optional, set by the compiler): integers phi_i such that
+
+            R = D^H M D,   D = diag(i^{phi_i}),
+
+        is real for every m (e.g. blocks at complex-conjugation invariant momenta);
+        M >= 0 <=> R >= 0. None means no phase is given and M is used as it is.
+        Only diagonal D is considered, because a general unitary transformation
+        makes the affine map of R dense.
     '''
     n_vars: int
     dim: int
@@ -68,6 +82,9 @@ class PSDConstraints:
     # flattened view of C_{ij}
     const_rows: list[int] = field(default_factory=list)
     const_vals: list[float|complex] = field(default_factory=list)
+
+    # exponents phi_i of the diagonal phase D = diag(i^{phi_i}) making D^H M D real
+    realify_phase: list[int] | None = None
 
     def add(self, i: int, j: int, expr: LinearExpr):
         idx = i + j * self.dim
@@ -83,18 +100,42 @@ class PSDConstraints:
             self.cols.append(k)
             self.vals.append(coeff)
 
-    def affine_map(self) -> tuple[sp.sparse.csc_matrix, np.ndarray]:
+    def affine_map(self, realify: bool = False) -> tuple[sp.sparse.csc_matrix, np.ndarray]:
         '''
             sparse A_{ij,k} of shape (dim^2, n_vars) and dense C_{ij} of shape (dim^2,),
-            such that vec(M) = A @ m + C with column-major vec (idx = i + j*dim)
+            such that vec(X) = A @ m + C with column-major vec (idx = i + j*dim), where
+
+                X = M                    if not realify,
+                X = R = D^H M D (real)   if realify (requires realify_phase).
+
+            R_{ij} = i^{phi_j - phi_i} M_{ij} is exact, so its imaginary part must vanish exactly.
         '''
+        if realify and self.realify_phase is None:
+            raise ValueError('realify requested but realify_phase is not set')
+
         shape = (self.dim*self.dim, self.n_vars)
 
         A = sp.sparse.csc_matrix((self.vals, (self.rows, self.cols)), shape=shape)
         dtype = np.result_type(np.asarray(self.vals), np.asarray(self.const_vals), float)
         C = np.zeros(self.dim*self.dim, dtype=dtype)
         np.add.at(C, self.const_rows, self.const_vals)
-        return A, C
+        if not realify:
+            return A, C
+
+        phi = np.asarray(self.realify_phase, dtype=np.int64)
+        if phi.shape != (self.dim,):
+            raise ValueError(f'realify_phase has shape {phi.shape}, expected ({self.dim},)')
+
+        # exact powers of i, no complex exponentiation
+        idx = np.arange(self.dim*self.dim)
+        powers = np.array([1, 1j, -1, -1j])
+        scale = powers[(phi[idx // self.dim] - phi[idx % self.dim]) % 4]
+
+        A = (sp.sparse.diags(scale) @ A).tocsc()
+        C = scale * C
+        if np.any(A.data.imag != 0) or np.any(C.imag != 0):
+            raise ValueError('D^H M D is not real for the given realify_phase')
+        return sp.sparse.csc_matrix(A.real), np.ascontiguousarray(C.real)
 
 
 @dataclass(slots=True)
@@ -106,7 +147,7 @@ class AffineConstraints:
     n_rows: int = 0
 
     def add(self, expr: LinearExpr):
-        for real_expr in expr.to_real():
+        for real_expr in expr.realify():
             for idx, coeff in real_expr.terms.items():
                 self.rows.append(self.n_rows)
                 self.cols.append(idx)
@@ -117,7 +158,7 @@ class AffineConstraints:
                 self.vals.append(real_expr.const)
             self.n_rows += 1
 
-    def matrix(self, prune: bool = False, tol: float = 1e-10):
+    def matrix(self, prune: bool = False, tol: float = 1e-12):
         mat = sp.sparse.csr_matrix(
             (self.vals, (self.rows, self.cols)),
             shape=(self.n_rows, self.n_vars+1),
@@ -157,22 +198,34 @@ class SDPSolver:
         self.status = None
 
     def _to_cp_expr(self, expr: LinearExpr):
+        import cvxpy as cp
         res = cp.Constant(expr.const)
         for idx, coeff in expr.terms.items():
             res += coeff * self.vars[idx]
         return res
 
     def build(self, data: SDPData):
+        import cvxpy as cp
+
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ variables
+        if data.var_cpx:
+            raise NotImplementedError('build: complex moment variables are not supported')
         self.vars = cp.Variable(data.n_vars, complex=data.var_cpx, name='vars')
         self.constraints = []
 
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ PSD constraints
         self.psd_exprs = []
         for block in data.psd_blocks:
-            A, C = block.affine_map()
+            # M, kept for psd_values()
+            A, C = block.affine_map(realify=False)
             expr = cp.reshape(A @ self.vars + cp.Constant(C), (block.dim, block.dim), order='F')
             self.psd_exprs.append(expr)
+
+            # R = D^H M D (real) if a realify phase is given: M >= 0 <=> R >= 0,
+            # and a real block is not doubled by cvxpy's complex-to-real embedding
+            if block.realify_phase is not None:
+                A, C = block.affine_map(realify=True)
+                expr = cp.reshape(A @ self.vars + cp.Constant(C), (block.dim, block.dim), order='F')
             self.constraints.append(expr >> 0)
 
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ affine constraints
@@ -295,6 +348,7 @@ class ScsSDPSolver:
         opts.setdefault('eps_abs', 1e-5)
         opts.setdefault('eps_rel', 1e-5)
         opts.setdefault('verbose', False)
+        opts.setdefault('adaptive_diag_scale', 0)  # SCS >= 3.3: ~10x slower with real PSD blocks
 
         scs_data, cone, layout = self.problem
         self.scs_output = scs.SCS(scs_data, cone, **opts).solve()
@@ -313,7 +367,7 @@ class ScsSDPSolver:
         x = self.scs_output['x']
         values = []
         for block in self.data.psd_blocks:
-            A, C = block.affine_map()
+            A, C = block.affine_map(realify=False)
             values.append((A @ x + C).reshape((block.dim, block.dim), order='F'))
         return values
 
@@ -355,22 +409,25 @@ class ScsSDPSolver:
     @staticmethod
     def _to_scs(data: SDPData, herm_tol: float = 1e-12):
         r'''
-            Convert to SCS standard form with native complex PSD cones:
+            Convert to SCS standard form with real and native complex PSD cones:
 
-                min c^T x   s.t.   A x + s = b,   s in K = {0}^z x R_+^l x prod_k H_+^{d_k},
+                min c^T x   s.t.   A x + s = b,
+                s in K = {0}^z x R_+^l x prod_k S_+^{d_k} x prod_k H_+^{d_k},
 
-            row order z (affines) -> l (energy window) -> cs (PSD blocks).
-            Each PSD block M = C + A_k x is entered through its Hermitian part
-            H = (M + M^H)/2 as cvec(H) = b_k - A'_k x (lower triangle by column;
-            diagonal H_jj, off-diagonal sqrt(2) Re H_ij, sqrt(2) Im H_ij).
+            row order z (affines) -> l (energy window) -> s (real PSD blocks) -> cs (complex PSD blocks).
+            A block X = C + A_k x is X = R = D^H M D if realify_phase is set, otherwise X = M.
+            X is real if all its coefficients are real (then cone s), otherwise complex (cone cs).
+            X is entered through its Hermitian part H = (X + X^H)/2, lower triangle by column:
+                s:  svec(H), diagonal H_jj, off-diagonal sqrt(2) H_ij                 (d (d+1) / 2 rows)
+                cs: cvec(H), diagonal H_jj, off-diagonal sqrt(2) Re H_ij, sqrt(2) Im H_ij  (d^2 rows)
 
             Returns (scs_data, cone, layout):
                 scs_data: {'A': csc (m, n), 'b': (m,), 'c': (n,)}, all real float64
-                cone: {'z': int, 'l': int, 'cs': [d_k, ...]}
+                cone: {'z': int, 'l': int, 's': [d_k, ...], 'cs': [d_k, ...]}
                 layout: obj_sign, obj_const   (objective value = obj_sign * c^T x + obj_const)
-                      block_offsets, block_dims (row range of block k:
-                                                 block_offsets[k] : block_offsets[k] + d_k^2)
-                      herm_err (max |M - M^H| entry of the coefficients, per block)
+                      block_cones, block_dims, block_offsets   (per block k in data.psd_blocks order:
+                                 cone 's' or 'cs', and row range block_offsets[k] : + rows of the cone)
+                      herm_err (max |X - X^H| entry of the coefficients, per block)
 
             Raises ValueError if a PSD block is not Hermitian (herm_err > herm_tol).
         '''
@@ -429,7 +486,21 @@ class ScsSDPSolver:
                 (np.concatenate(v_all), (np.concatenate(r_idx), np.concatenate(c_idx))), shape=(n_l, n)))
             b_parts.append(b_l)
 
-        # ---- complex PSD cones
+        # ---- PSD cones
+        def sym_svec_map(d):
+            # real map T (d(d+1)/2 x d^2) with svec(Sym(X)) = T vec(X), vec in column-major order
+            jj, ii = np.triu_indices(d)                 # (j, i) with i >= j, ordered by column j then i
+            ij = ii + jj * d
+            ji = jj + ii * d
+            diag = ii == jj
+            od = ~diag
+            rows = np.arange(len(ii))
+            h = 1. / np.sqrt(2.)
+            t_rows = np.concatenate([rows[diag], rows[od], rows[od]])
+            t_cols = np.concatenate([ij[diag], ij[od], ji[od]])
+            t_vals = np.concatenate([np.ones(diag.sum()), np.full(od.sum(), h), np.full(od.sum(), h)])
+            return sp.sparse.csr_matrix((t_vals, (t_rows, t_cols)), shape=(len(ii), d * d))
+
         def herm_cvec_maps(d):
             # real maps T_re, T_im (d^2 x d^2) with cvec(Herm(M)) = T_re Re vec(M) + T_im Im vec(M),
             # vec in column-major order (idx = i + j d), cvec as in SCS (lower triangle by column)
@@ -452,33 +523,48 @@ class ScsSDPSolver:
             T_im = sp.sparse.csr_matrix((im_vals, (im_rows, im_cols)), shape=(d * d, d * d))
             return T_re, T_im
 
-        block_dims, block_offsets, herm_err = [], [], []
-        row = n_z + n_l
+        psd_parts = {'s': [], 'cs': []}            # per cone: (k, A rows, b rows)
+        n_blocks = len(data.psd_blocks)
+        block_cones, block_dims, herm_err = [None] * n_blocks, [None] * n_blocks, [None] * n_blocks
         for k, block in enumerate(data.psd_blocks):
             d = block.dim
             if block.n_vars != n:
                 raise ValueError(f'PSD block has n_vars={block.n_vars}, expected {n}')
-            A_k, C_k = block.affine_map()              # vec(M) = A_k x + C_k
+            # vec(X) = A_k x + C_k,  X = R if realify_phase is set, else M
+            A_k, C_k = block.affine_map(realify=block.realify_phase is not None)
             A_k = sp.sparse.csr_matrix(A_k, dtype=complex)
             C_k = np.asarray(C_k, dtype=complex)
 
-            # Hermiticity diagnostic: vec(M^H)[i + j d] = conj(M_ji)
+            # Hermiticity diagnostic: vec(X^H)[i + j d] = conj(X_ji)
             perm = (np.arange(d * d) % d) * d + np.arange(d * d) // d
             dA = A_k - A_k[perm].conj()
             err = max(np.max(np.abs(dA.data), initial=0.), np.max(np.abs(C_k - C_k[perm].conj()), initial=0.))
             if err > herm_tol:
                 raise ValueError(f'_to_scs: PSD block {k} (dim {d}) is not Hermitian: '
-                                 f'max |M - M^H| coefficient = {err:.1e} > {herm_tol:.0e}')
-            herm_err.append(float(err))
+                                 f'max |X - X^H| coefficient = {err:.1e} > {herm_tol:.0e}')
+            herm_err[k] = float(err)
+            block_dims[k] = d
 
-            T_re, T_im = herm_cvec_maps(d)
-            A_cs = -(T_re @ sp.sparse.csr_matrix(A_k.real) + T_im @ sp.sparse.csr_matrix(A_k.imag))
-            b_cs = T_re @ C_k.real + T_im @ C_k.imag
-            A_parts.append(A_cs)
-            b_parts.append(b_cs)
-            block_dims.append(d)
-            block_offsets.append(row)
-            row += d * d
+            if np.all(A_k.data.imag == 0) and np.all(C_k.imag == 0):
+                T = sym_svec_map(d)
+                block_cones[k] = 's'
+                psd_parts['s'].append((k, -(T @ sp.sparse.csr_matrix(A_k.real)), T @ C_k.real))
+            else:
+                T_re, T_im = herm_cvec_maps(d)
+                block_cones[k] = 'cs'
+                psd_parts['cs'].append((k, -(T_re @ sp.sparse.csr_matrix(A_k.real)
+                                             + T_im @ sp.sparse.csr_matrix(A_k.imag)),
+                                        T_re @ C_k.real + T_im @ C_k.imag))
+
+        # real PSD cones before complex PSD cones (SCS cone order)
+        block_offsets = [None] * n_blocks
+        row = n_z + n_l
+        for kind in ('s', 'cs'):
+            for k, A_blk, b_blk in psd_parts[kind]:
+                A_parts.append(A_blk)
+                b_parts.append(b_blk)
+                block_offsets[k] = row
+                row += A_blk.shape[0]
 
         if A_parts:
             A = sp.sparse.vstack(A_parts, format='csc')
@@ -491,15 +577,17 @@ class ScsSDPSolver:
         A.sort_indices()
 
         cone = {'z': n_z, 'l': n_l}
-        if block_dims:
-            cone['cs'] = block_dims
+        for kind in ('s', 'cs'):
+            if psd_parts[kind]:
+                cone[kind] = [block_dims[k] for k, _, _ in psd_parts[kind]]
 
         scs_data = {'A': A, 'b': np.ascontiguousarray(b, dtype=float), 'c': np.ascontiguousarray(c, dtype=float)}
         layout = {
             'obj_sign': obj_sign,
             'obj_const': obj_const,
-            'block_offsets': block_offsets,
+            'block_cones': block_cones,
             'block_dims': block_dims,
+            'block_offsets': block_offsets,
             'herm_err': herm_err,
         }
         return scs_data, cone, layout

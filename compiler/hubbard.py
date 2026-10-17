@@ -332,8 +332,14 @@ class HubbardCompiler:
                             self.vars.append(MajoranaMonomial(L=self.L, mask=key))
 
     def fourier_phase(self, q: int, r: int) -> complex:
-        # q is the integer momentum-sector index
-        return np.exp(1j * 2 * np.pi * q * r / self.L)
+        # q is the integer momentum-sector index;
+        # exact at multiples of L/4 and n -> -n symmetric, so Fourier sums cancel exactly
+        n = (q * r) % self.L
+        if 4 * n % self.L == 0:
+            return 1j ** (4 * n // self.L)
+        if 2 * n > self.L:
+            n -= self.L
+        return np.exp(1j * 2 * np.pi * n / self.L)
 
     @staticmethod
     def nonzero_fourier(monomial: MajoranaMonomial, q: int) -> bool:
@@ -407,6 +413,12 @@ class HubbardCompiler:
                         if abs(expr[idx]) < 1e-14:
                             del expr[idx]
                     psd.add(row, col, LinearExpr(terms=expr, const=0))
+
+            # at complex-conjugation invariant momenta (q = -q mod L),
+            # K maps M(k) to itself and D^H M(k) D is real for D = diag(i^{n_a}),
+            # n_a = parity of the number of gamma_2 Majoranas in O_a
+            if (2 * q) % self.L == 0:
+                psd.realify_phase = [monomial.k_parity(hermitian=False) for monomial in block_basis]
             self.psd_blocks.append(psd)
 
     def _hamil_comm(self, monomial: MajoranaMonomial) -> MajoranaOperator:

@@ -233,10 +233,18 @@ class HubbardSquareCompiler:
         return MajoranaMonomialSquare(self.Lx, self.Ly, self.trans_canon(monomial))
 
     def fourier_phase(self, q: tuple[int, int], r: tuple[int, int]) -> complex:
-        # q is the integer momentum-sector index
+        # q is the integer momentum-sector index;
+        # phase = w^n with w = e^{2 pi i / N}, N = Lx * Ly, n = qx x Ly + qy y Lx (mod N);
+        # exact at multiples of N/4 and n -> -n symmetric, so Fourier sums cancel exactly
         qx, qy = q
         x, y = r
-        return np.exp(1j * 2 * np.pi * (qx * x / self.Lx + qy * y / self.Ly))
+        N = self.Lx * self.Ly
+        n = (qx * x * self.Ly + qy * y * self.Lx) % N
+        if 4 * n % N == 0:
+            return 1j ** (4 * n // N)
+        if 2 * n > N:
+            n -= N
+        return np.exp(1j * 2 * np.pi * n / N)
 
     @staticmethod
     def nonzero_fourier(monomial: MajoranaMonomialSquare, q: tuple[int, int]) -> bool:
@@ -441,6 +449,13 @@ class HubbardSquareCompiler:
                             if abs(expr[idx]) < 1e-14:
                                 del expr[idx]
                     psd.add(row, col, LinearExpr(terms=expr, const=0))
+
+            # at complex-conjugation invariant momenta (q = -q mod (Lx, Ly)),
+            # K maps M(k) to itself and D^H M(k) D is real for D = diag(i^{n_a}),
+            # n_a = parity of the number of gamma_2 Majoranas in O_a
+            qx, qy = q
+            if (2 * qx) % self.Lx == 0 and (2 * qy) % self.Ly == 0:
+                psd.realify_phase = [monomial.k_parity(hermitian=False) for monomial in block_basis]
             self.psd_blocks.append(psd)
 
     def _add_hamil_wards(self):
