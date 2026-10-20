@@ -24,7 +24,7 @@ if __name__ == '__main__':
             for monomial in ['I', '0u+', '0u-', '0u+ 0u-', '0d+', '0d-', '0d+ 0d-']
         ],
         nga_params=NGAParams(
-            solver_backend='SCS_SSNAL',
+            solver_backend='SCS_QMBBOOT',
             solver_kwargs={'eps': eps},
             drop_null_tol=eps,
             grow_null_tol=eps,

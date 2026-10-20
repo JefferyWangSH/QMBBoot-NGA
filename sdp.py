@@ -321,12 +321,12 @@ class SDPSolver:
 
 class ScsSDPSolver:
     '''
-        SDP solver calling scs-python directly with native complex PSD cones.
+        SDP solver calling scs-qmbboot (scs_qmbboot) directly with native complex PSD cones.
         It shares the same interface as SDPSolver:
         build(data), solve(backend, **kwargs), summary(), psd_values().
     '''
 
-    name = 'SCS_SSNAL'
+    name = 'SCS_QMBBOOT'
 
     # SCS status_val -> cvxpy status (as in cvxpy's SCS interface)
     STATUS = {
@@ -364,7 +364,10 @@ class ScsSDPSolver:
             mapped onto the built problem by the keys (see _import_warm);
             None for a cold start. SCS's scale is not carried over.
         '''
-        import scs
+        try:
+            import scs_qmbboot as scs
+        except ImportError as e:
+            raise ImportError('ScsSDPSolver needs scs-qmbboot, see requirements.txt') from e
         if self.problem is None:
             raise ValueError('problem has not been built')
         if warm_start is not None and not isinstance(warm_start, dict):

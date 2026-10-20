@@ -18,12 +18,13 @@ if __name__ == '__main__':
     data = compiler.sdp_data()
     eps = 1e-5
 
-    # same SDPData: cvxpy + SCS (complex blocks real-embedded as 2d x 2d) vs scs-python
+    # same SDPData: cvxpy + SCS (complex blocks real-embedded as 2d x 2d) vs scs-qmbboot
     # (native complex PSD cones); realified blocks are real d x d blocks in both;
-    # same SCS settings (adaptive_diag_scale is ScsSDPSolver's default, passed explicitly to cvxpy)
+    # same SCS settings: cvxpy gets the native solver's defaults adaptive_diag_scale=0 and
+    # acceleration_lookback=0 explicitly
     energies = {}
     for name, solver, kwargs in [
-        ('cvxpy SCS', SDPSolver(), dict(backend='SCS', eps=eps, adaptive_diag_scale=0)),
+        ('cvxpy SCS', SDPSolver(), dict(backend='SCS', eps=eps, adaptive_diag_scale=0, acceleration_lookback=0)),
         ('native SCS', ScsSDPSolver(), dict(eps=eps)),
     ]:
         solver.build(data)

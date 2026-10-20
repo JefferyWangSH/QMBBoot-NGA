@@ -118,9 +118,9 @@ class NGARunner:
         self.scheduler = scheduler
         self.nga_params = nga_params
 
-        if nga_params.warm_start and nga_params.solver_backend != 'SCS_SSNAL':
+        if nga_params.warm_start and nga_params.solver_backend != 'SCS_QMBBOOT':
             raise ValueError(f'warm_start is not supported by solver backend {nga_params.solver_backend}')
-        if nga_params.solver_backend == 'SCS_SSNAL':
+        if nga_params.solver_backend == 'SCS_QMBBOOT':
             from sdp import ScsSDPSolver
             self.solver = ScsSDPSolver()
         else:
