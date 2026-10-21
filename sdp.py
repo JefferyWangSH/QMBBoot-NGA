@@ -1,4 +1,6 @@
 from dataclasses import dataclass, field
+import json
+
 import numpy as np
 import scipy as sp
 import sksparse.spqr as spqr
@@ -201,6 +203,54 @@ class SDPData:
     var_keys: list | None = None
 
 
+@dataclass(slots=True)
+class SDPWarmData:
+    '''
+        basis-independent warm start of a solution, keyed by the compiler keys
+        (SDPData.var_keys, PSDConstraints.block_key and row_keys):
+
+            x:      {var_key: x_i}
+            y_l:    energy-window duals, shape (n_l,)
+            y_psd:  {block_key: (row_keys, Y)},  Y the Hermitian PSD dual of moment matrix M
+
+        save() / load() use an npz without pickle: var and row keys must be ints, block keys
+        JSON-serializable (tuples come back as tuples), Y is stored by its lower triangle.
+    '''
+    x: dict[int, float]
+    y_l: np.ndarray
+    y_psd: dict[object, tuple[list[int], np.ndarray]]
+
+    def save(self, path):
+        keys = lambda ks: np.array([str(k) for k in ks], dtype=bytes)
+        arrays = {
+            'x_keys': keys(self.x),
+            'x': np.fromiter(self.x.values(), dtype=float, count=len(self.x)),
+            'y_l': self.y_l,
+            'block_keys': np.array([json.dumps(k) for k in self.y_psd], dtype=bytes),
+        }
+        for i, (rows, Y) in enumerate(self.y_psd.values()):
+            arrays[f'psd{i}_row_keys'] = keys(rows)
+            arrays[f'psd{i}_Y_lower'] = Y[np.tril_indices(len(rows))]
+        np.savez(path, **arrays)
+
+    @classmethod
+    def load(cls, path):
+        ints = lambda ks: [int(k) for k in ks]
+        y_psd = {}
+        with np.load(path) as f:
+            for i, block_key in enumerate(f['block_keys']):
+                rows = ints(f[f'psd{i}_row_keys'])
+                Y = np.zeros((len(rows), len(rows)), dtype=complex)
+                Y[np.tril_indices(len(rows))] = f[f'psd{i}_Y_lower']
+                y_psd[cls._tuples(json.loads(block_key))] = (rows, Y + np.tril(Y, -1).conj().T)
+            return cls(x=dict(zip(ints(f['x_keys']), f['x'].tolist())), y_l=f['y_l'], y_psd=y_psd)
+
+    @staticmethod
+    def _tuples(value):
+        # JSON lists back to tuples
+        return tuple(map(SDPWarmData._tuples, value)) if isinstance(value, list) else value
+
+
 class SDPSolver:
     def __init__(self):
         self.vars = None
@@ -280,7 +330,7 @@ class SDPSolver:
         self.problem = cp.Problem(self.objective, self.constraints)
         return self.problem
 
-    def solve(self, backend: str = 'SCS', warm_start: dict | None = None, **kwargs):
+    def solve(self, backend: str = 'SCS', warm_start: SDPWarmData | None = None, **kwargs):
         '''
             warm_start is currently not supported through cvxpy,
             accepted for interface compatibility with ScsSDPSolver.solve.
@@ -355,7 +405,7 @@ class ScsSDPSolver:
         self.scs_output = self.status = None
         return self.problem
 
-    def solve(self, backend: str | None = None, warm_start: dict | None = None, **kwargs):
+    def solve(self, backend: str | None = None, warm_start: SDPWarmData | None = None, **kwargs):
         '''
             `backend` is ignored (interface compatibility). kwargs are SCS settings, translated
             as cvxpy does: eps -> eps_abs = eps_rel = eps; default eps_abs = eps_rel = 1e-5.
@@ -370,8 +420,8 @@ class ScsSDPSolver:
             raise ImportError('ScsSDPSolver needs scs-qmbboot, see requirements.txt') from e
         if self.problem is None:
             raise ValueError('problem has not been built')
-        if warm_start is not None and not isinstance(warm_start, dict):
-            raise TypeError(f'warm_start must be the dict from export_warm(), got {type(warm_start).__name__}')
+        if warm_start is not None and not isinstance(warm_start, SDPWarmData):
+            raise TypeError(f'warm_start must be the SDPWarmData from export_warm(), got {type(warm_start).__name__}')
         opts = dict(kwargs)
         if 'eps' in opts:
             opts['eps_abs'] = opts['eps_rel'] = opts.pop('eps')
@@ -667,15 +717,9 @@ class ScsSDPSolver:
         }
         return scs_data, cone, layout
 
-    def export_warm(self) -> dict:
+    def export_warm(self) -> SDPWarmData:
         '''
-            basis-independent warm start of the current solution, keyed by the compiler keys
-            (SDPData.var_keys, PSDConstraints.block_key and row_keys):
-
-                x:      {var key: x_i}
-                y_l:    energy-window duals, shape (n_l,)
-                y_psd:  {block_key: (row_keys, Y)},  Y = D Y_X D^H the PSD dual in the M basis,
-                        with Y_X the dual of the cone matrix X (R = D^H M D, or M with D = I)
+            Export the current solution as SDPWarmData, with Y the dual of the moment matrix M.
 
             Not exported: s (recomputed from x), zero-cone duals (rows selected by SPQR
             differ between problems), and SCS's adapted scale.
@@ -713,13 +757,13 @@ class ScsSDPSolver:
                 Y = w[:, None] * Y * w.conj()[None, :]
             y_psd[block.block_key] = (list(block.row_keys), Y)
 
-        return {
-            'x': dict(zip(data.var_keys, self.scs_output['x'].tolist())),
-            'y_l': y[n_z:n_z + n_l].copy(),
-            'y_psd': y_psd,
-        }
+        return SDPWarmData(
+            x=dict(zip(data.var_keys, self.scs_output['x'].tolist())),
+            y_l=y[n_z:n_z + n_l].copy(),
+            y_psd=y_psd,
+        )
 
-    def _import_warm(self, warm: dict):
+    def _import_warm(self, warm: SDPWarmData):
         '''
             SCS warm start (x, y, s) on the built problem from export_warm() of a previous solution
             (possibly of another SDPData), matched by the keys:
@@ -742,13 +786,13 @@ class ScsSDPSolver:
         scs_data, cone, layout = self.problem
         n_z, n_l = cone['z'], cone['l']
 
-        x = np.array([warm['x'].get(key, 0.) for key in data.var_keys], dtype=float)
+        x = np.array([warm.x.get(key, 0.) for key in data.var_keys], dtype=float)
         r = scs_data['b'] - scs_data['A'] @ x       # vec_K(Herm X(x)) on the PSD rows
         y = np.zeros_like(r)
         s = np.zeros_like(r)
 
-        if len(warm['y_l']) == n_l:
-            y[n_z:n_z + n_l] = warm['y_l']
+        if len(warm.y_l) == n_l:
+            y[n_z:n_z + n_l] = warm.y_l
         s[n_z:n_z + n_l] = np.maximum(r[n_z:n_z + n_l], 0.)
 
         for k, block in enumerate(data.psd_blocks):
@@ -758,9 +802,9 @@ class ScsSDPSolver:
             real = layout['block_cones'][k] == 's'
             rows = slice(off, off + (d * (d + 1) // 2 if real else d * d))
 
-            # y: old dual (M basis) on the shared rows, zero for new rows
+            # y: old dual of M on the shared rows, zero for new rows
             Y = np.zeros((d, d), dtype=complex)
-            old = warm['y_psd'].get(block.block_key)
+            old = warm.y_psd.get(block.block_key)
             if old is not None:
                 old_keys, Y_old = old
                 pos = {key: i for i, key in enumerate(old_keys)}

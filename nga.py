@@ -95,6 +95,7 @@ class NGARunner:
         scheduler,
         nga_params: NGAParams,
         drop_counts: dict | None = None,
+        warm_data: 'SDPWarmData | None' = None,
     ):
         self.compiler = compiler
 
@@ -126,7 +127,7 @@ class NGARunner:
         else:
             from sdp import SDPSolver
             self.solver = SDPSolver()
-        self.warm_data = None # export_warm() of the previous solution
+        self.warm_data = warm_data # export_warm() of the previous solution
         self._reset_record()
         self.history = []
 

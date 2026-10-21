@@ -8,6 +8,7 @@ import sys
 from contextlib import contextmanager
 
 from nga import NGAParams, NGARunner
+from sdp import SDPWarmData
 
 @dataclass
 class ModelAdapter:
@@ -22,6 +23,7 @@ class ModelAdapter:
     records: list
     events: dict
     drop_counts: dict
+    warm_data: SDPWarmData | None
 
     @staticmethod
     def build_compiler_kwargs(config_data: dict, build_obj, build_obs):
@@ -222,6 +224,7 @@ class ModelAdapter:
             resume_state = Path(resume) / 'state.json'
             resume_basis = Path(resume) / 'basis.json'
             resume_events = Path(resume) / 'events.json'
+            resume_warm = Path(resume) / 'warm.npz'
 
             state = json.loads(resume_state.read_text())
             if state['model_type'] != model_type or state['model'] != asdict(model_params):
@@ -237,6 +240,9 @@ class ModelAdapter:
                 for rep in build_basis(event.get('drop', [])):
                     key = rep.trans_canon
                     drop_counts[key] = drop_counts.get(key, 0) + 1
+
+            # warm start the first resumed step from the last saved solution
+            warm_data = SDPWarmData.load(resume_warm) if nga_params.warm_start and resume_warm.exists() else None
 
             # apply the last move
             if events.get('steps'):
@@ -263,8 +269,9 @@ class ModelAdapter:
                 'steps': [],
             }
             drop_counts = {}
+            warm_data = None
 
-        return cls(model_type, model_params, compiler, nga_params, scheduler, basis, required_basis, start_step, records, events, drop_counts)
+        return cls(model_type, model_params, compiler, nga_params, scheduler, basis, required_basis, start_step, records, events, drop_counts, warm_data)
 
     def get_basis_rep(self, key):
         if self.model_type == 'hubbard':
@@ -318,6 +325,7 @@ if __name__ == '__main__':
     output_basis = args.output_dir / 'basis.json'
     output_state = args.output_dir / 'state.json'
     output_events = args.output_dir / 'events.json'
+    output_warm = args.output_dir / 'warm.npz'
 
     runner = NGARunner(
         compiler=adapter.compiler,
@@ -326,6 +334,7 @@ if __name__ == '__main__':
         nga_params=adapter.nga_params,
         scheduler=adapter.scheduler,
         drop_counts=adapter.drop_counts,
+        warm_data=adapter.warm_data,
     )
 
     start_step = adapter.start_step
@@ -380,6 +389,9 @@ if __name__ == '__main__':
         output_basis.write_text(
             json.dumps([str(rep.trans_canon_rep) for rep in step_basis], indent=2)
         )
+
+        if runner.warm_data is not None:
+            runner.warm_data.save(output_warm)
 
         print(
             f'[{step:03d}] '
