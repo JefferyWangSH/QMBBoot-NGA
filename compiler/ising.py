@@ -80,6 +80,7 @@ class IsingCompiler:
     var_cpx: bool = False
     var_index: dict[int, int]
     vars: list[PauliString]
+    _moments_lookup: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None
     ward_ops: dict[str, int]
 
     block_reprs: list[list[PauliString]]
@@ -91,7 +92,7 @@ class IsingCompiler:
     affines_mat: sp.sparse.csr_matrix
 
     hamil_op: PauliOperator
-    _hamil_terms_at_site: list[list[tuple[tuple[tuple[int, int], ...], int, float | complex]]]
+    _hamil_lookup: list[list[tuple[tuple[tuple[int, int], ...], int, float | complex]]]
 
     # SDP objective
     obj_op: PauliOperator
@@ -120,12 +121,12 @@ class IsingCompiler:
 
         self.hamil_op = build_hamil(params)
 
-        # Hamiltonian terms bucketed by every site in their support
-        # for each site, it involves a list of
+        # _hamil_lookup[site] lists the local Hamiltonian terms acting on the site;
+        # each entry stores
         # 1) h_sites: tuple of (site, Pauli code)
         # 2) h_mask: Hamiltonian Pauli mask
         # 3) h_coeff: Hamiltonian coefficient
-        self._hamil_terms_at_site = [[] for _ in range(self.L)]
+        self._hamil_lookup = [[] for _ in range(self.L)]
         for hstr, h_coeff in self.hamil_op.terms.items():
             h_mask = hstr.mask
             h_sites = []
@@ -139,7 +140,7 @@ class IsingCompiler:
 
             h_sites = tuple(h_sites)
             for site, _ in h_sites:
-                self._hamil_terms_at_site[site].append((h_sites, h_mask, self.L * h_coeff))
+                self._hamil_lookup[site].append((h_sites, h_mask, self.L * h_coeff))
 
         if obj_sense not in ('min', 'max'):
             raise ValueError('objective sense must be min or max')
@@ -197,7 +198,7 @@ class IsingCompiler:
         return allowed
 
     def _build_vars(self):
-        '''
+        r'''
             build K-even SDP variables
 
             SDP variables involve only K-even Pauli strings because:
@@ -209,21 +210,69 @@ class IsingCompiler:
 
             combining these facts yields <O_odd> = 0,
             therefore any K-odd Pauli string can be removed from SDP variables.
+
+            The variables are built in one pass over (O_b, O_a, r); the lookup (b, a, r) -> (var_idx, coeff)
+            with (T_r O_a)^\dag O_b = coeff * m[var_idx] is kept in self._moments_lookup for _build_psd,
+            which only adds the Fourier phases.
         '''
         self.vars = []
         self.var_index = {}
+        translates = [[pstr.translate(r) for r in range(self.L)] for pstr in self.basis_reprs]
 
-        for pstr1 in self.basis_reprs:
-            for r in range(pstr1.period):
-                pstr1r = pstr1.translate(r)
-                for pstr2 in self.basis_reprs:
-                    pstr, _ = pstr1r.dag().mul(pstr2)
+        r'''
+            for each pair (O_a, O_b) we record a list of terms (r, var_idx, coeff), one per translation r:
 
-                    if self._sym_allowed(pstr):
-                        key = self._sym_canon(pstr)
-                        if key not in self.var_index:
-                            self.var_index[key] = len(self.vars)
-                            self.vars.append(PauliString(L=self.L, mask=key))
+                (T_r O_a)^\dag O_b = coeff * m[var_idx],   coeff = +-1 or +-i;
+
+            an r whose product is not _sym_allowed gives no term.
+
+            This is a 3d array [b, a, r] with the missing r removed, flattened to 1d (as in CSR):
+            the terms of all pairs are concatenated in the order (b, a, r) into three 1d arrays of the same length,
+
+                rs[t], idxs[t], coeffs[t]   (translation, variable index, coefficient),
+
+            and the terms of the pair (a, b) are t in [pair_offsets[k], pair_offsets[k] + pair_sizes[k]),
+            k = b*n + a, n = len(basis_reprs).
+
+            While building:
+                b_rs, b_idxs, b_coeffs   terms of the current O_b (all O_a), Python lists
+                rs, idxs, coeffs         one numpy chunk per O_b (converted after each O_b to save memory),
+                                         concatenated at the end
+                pair_offsets, pair_sizes index of the first term and number of terms of each pair, order b*n + a
+                n_terms                  number of terms before the current O_b
+        '''
+        pair_offsets, pair_sizes, rs, idxs, coeffs = [], [], [], [], []
+        n_terms = 0
+        for pstr_b in self.basis_reprs:
+            b_rs, b_idxs, b_coeffs = [], [], []
+            for a_translates in translates:
+                start = len(b_rs)
+                pair_offsets.append(n_terms + start)
+                for r, pstr_ar in enumerate(a_translates):
+                    pstr, coeff = pstr_ar.dag().mul(pstr_b)
+
+                    if not self._sym_allowed(pstr):
+                        continue
+                    key = self._sym_canon(pstr)
+                    if key not in self.var_index:
+                        self.var_index[key] = len(self.vars)
+                        self.vars.append(PauliString(L=self.L, mask=key))
+                    b_rs.append(r)
+                    b_idxs.append(self.var_index[key])
+                    b_coeffs.append(coeff)
+                pair_sizes.append(len(b_rs) - start)
+            rs.append(np.array(b_rs, dtype=np.int32))
+            idxs.append(np.array(b_idxs, dtype=np.int32))
+            coeffs.append(np.array(b_coeffs, dtype=complex))
+            n_terms += len(b_rs)
+
+        self._moments_lookup = (
+            np.array(pair_offsets, dtype=np.int64),
+            np.array(pair_sizes, dtype=np.int64),
+            np.concatenate(rs),
+            np.concatenate(idxs),
+            np.concatenate(coeffs),
+        )
 
     def fourier_phase(self, q: int, r: int) -> complex:
         # q is the integer momentum-sector index;
@@ -256,38 +305,40 @@ class IsingCompiler:
             self.block_keys.append(q)
 
     def _build_psd(self):
-        '''
-            build momentum PSD blocks M(k)
+        r'''
+            build momentum PSD blocks M(k) from self._moments_lookup of _build_vars:
+            M_{ab}(q) = \sum_r e^{iqr} / L * coeff * m[var_idx] over the list of the pair (a, b)
         '''
         self.psd_blocks = []
+        n_basis = len(self.basis_reprs)
+        n_vars = len(self.vars)
+        pair_offsets, pair_sizes, r_terms, var_terms, coeff_terms = self._moments_lookup
+        basis_index = {pstr.mask: a for a, pstr in enumerate(self.basis_reprs)}
 
         r'''
             K symmetry imposes that M(-k) = diag(eta) M(k)^\ast diag(eta)
             therefore the number of independent momentum PSD blocks can be reduced by half
         '''
         for q, block_key, block_basis in zip(self.block_momenta, self.block_keys, self.block_reprs):
+            dim = len(block_basis)
             psd = PSDConstraints(
-                n_vars=len(self.vars),
-                dim=len(block_basis),
+                n_vars=n_vars,
+                dim=dim,
                 block_key=block_key,
-                row_keys=[self.trans_canon(pstr) for pstr in block_basis],
+                basis_keys=[self.trans_canon(pstr) for pstr in block_basis],
             )
 
-            for row, pstr1 in enumerate(block_basis):
-                for col, pstr2 in enumerate(block_basis):
-                    expr = {}
-                    for r in range(self.L):
-                        pstr1r = pstr1.translate(r)
-                        pstr, phase = pstr1r.dag().mul(pstr2)
-                        if not self._sym_allowed(pstr):
-                            continue
+            phases = np.array([self.fourier_phase(q, r) / self.L for r in range(self.L)])
+            block_index = np.array([basis_index[pstr.mask] for pstr in block_basis])
+            pairs = (block_index[:, None] * n_basis + block_index[None, :]).ravel()
+            starts = pair_offsets[pairs]
+            counts = pair_sizes[pairs]
+            terms = np.arange(counts.sum()) + np.repeat(starts - (np.cumsum(counts) - counts), counts)
 
-                        idx = self.var_index[self._sym_canon(pstr)]
-                        coeff = self.fourier_phase(q, r) * phase / self.L
-                        expr[idx] = expr.get(idx, 0) + coeff
-                        if abs(expr[idx]) < 1e-14:
-                            del expr[idx]
-                    psd.add(row, col, LinearExpr(terms=expr, const=0))
+            # COO terms of the affine map vec(M(q)) = A @ m;
+            psd.rows = np.repeat(np.arange(dim*dim), counts)
+            psd.cols = var_terms[terms]
+            psd.vals = phases[r_terms[terms]] * coeff_terms[terms]
 
             # at complex-conjugation invariant momenta (q = -q mod L),
             # K maps M(k) to itself and D^H M(k) D is real for D = diag(i^{n_a}),
@@ -305,7 +356,7 @@ class IsingCompiler:
             site = (bit.bit_length() - 1) // 2
             support &= ~(3 << (2*site))
 
-            for h_sites, h_mask, h_coeff in self._hamil_terms_at_site[site]:
+            for h_sites, h_mask, h_coeff in self._hamil_lookup[site]:
                 if h_mask in seen:
                     continue
                 seen.add(h_mask)
@@ -332,7 +383,7 @@ class IsingCompiler:
             site = (bit.bit_length() - 1) // 2
             support &= ~(3 << (2*site))
 
-            for h_sites, h_mask, h_coeff in self._hamil_terms_at_site[site]:
+            for h_sites, h_mask, h_coeff in self._hamil_lookup[site]:
                 if h_mask in seen:
                     continue
                 seen.add(h_mask)
@@ -379,7 +430,7 @@ class IsingCompiler:
                 site = (bit.bit_length() - 1) // 2
                 support &= ~(3 << (2*site))
 
-                for h_sites, h_mask, _ in self._hamil_terms_at_site[site]:
+                for h_sites, h_mask, _ in self._hamil_lookup[site]:
                     anticomm = 0
                     for h_site, h_code in h_sites:
                         p_code = (pstr.mask >> (2*h_site)) & 3
@@ -484,6 +535,7 @@ class IsingCompiler:
 
         self._build_block_reprs()
         self._build_psd()
+        self._moments_lookup = None
         self._build_affines()
 
     def descendants(self, pstr: PauliString):

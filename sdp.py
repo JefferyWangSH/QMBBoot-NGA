@@ -73,16 +73,17 @@ class PSDConstraints:
         Only diagonal D is considered, because a general unitary transformation
         makes the affine map of R dense.
 
-        block_key and row_keys (optional, set by the compiler) identify blocks and rows across SDPData:
+        block_key and basis_keys (optional, set by the compiler) identify blocks and basis operators across SDPData:
             block_key: symmetry sector of the block (e.g. (momentum, parities)), unique within an SDPData;
-            row_keys:  key of the basis operator of each row, unique within the block.
+            basis_keys: key of the basis operator of each row, unique within the block.
         In two SDPData, entries between rows of equal keys in blocks of equal keys are the same
         affine maps of variables of equal keys (see SDPData.var_keys). None means not given.
     '''
     n_vars: int
     dim: int
 
-    # flattened view of A^k_{ij} into a sparse matrix A_{ij,k}
+    # flattened view of A^k_{ij} into a sparse matrix A_{ij,k}, as COO terms (row = i + j*dim, col = k);
+    # duplicate terms are summed implicitly in affine_map
     rows: list[int] = field(default_factory=list)
     cols: list[int] = field(default_factory=list)
     vals: list[float|complex] = field(default_factory=list)
@@ -97,23 +98,9 @@ class PSDConstraints:
     # symmetry sector of the block, unique within an SDPData,
     # and basis operator (string / monomial) key of each row, unique within the block
     block_key: object = None
-    row_keys: list | None = None
+    basis_keys: list | None = None
 
-    def add(self, i: int, j: int, expr: LinearExpr):
-        idx = i + j * self.dim
-
-        if expr.const != 0:
-            self.const_rows.append(idx)
-            self.const_vals.append(expr.const)
-
-        for k, coeff in expr.terms.items():
-            if coeff == 0:
-                continue
-            self.rows.append(idx)
-            self.cols.append(k)
-            self.vals.append(coeff)
-
-    def affine_map(self, realify: bool = False) -> tuple[sp.sparse.csc_matrix, np.ndarray]:
+    def affine_map(self, realify: bool = False, tol: float = 1e-14) -> tuple[sp.sparse.csc_matrix, np.ndarray]:
         '''
             sparse A_{ij,k} of shape (dim^2, n_vars) and dense C_{ij} of shape (dim^2,),
             such that vec(X) = A @ m + C with column-major vec (idx = i + j*dim), where
@@ -122,13 +109,15 @@ class PSDConstraints:
                 X = R = D^H M D (real)   if realify (requires realify_phase).
 
             R_{ij} = i^{phi_j - phi_i} M_{ij} is exact, so its imaginary part must vanish exactly.
+            Duplicate terms of A are summed, and sums with |A_{ij,k}| < tol are dropped.
         '''
         if realify and self.realify_phase is None:
             raise ValueError('realify requested but realify_phase is not set')
 
         shape = (self.dim*self.dim, self.n_vars)
-
         A = sp.sparse.csc_matrix((self.vals, (self.rows, self.cols)), shape=shape)
+        A.data[np.abs(A.data) < tol] = 0
+        A.eliminate_zeros()
         dtype = np.result_type(np.asarray(self.vals), np.asarray(self.const_vals), float)
         C = np.zeros(self.dim*self.dim, dtype=dtype)
         np.add.at(C, self.const_rows, self.const_vals)
@@ -207,11 +196,11 @@ class SDPData:
 class SDPWarmData:
     '''
         basis-independent warm start of a solution, keyed by the compiler keys
-        (SDPData.var_keys, PSDConstraints.block_key and row_keys):
+        (SDPData.var_keys, PSDConstraints.block_key and PSDConstraints.basis_keys):
 
             x:      {var_key: x_i}
             y_l:    energy-window duals, shape (n_l,)
-            y_psd:  {block_key: (row_keys, Y)},  Y the Hermitian PSD dual of moment matrix M
+            y_psd:  {block_key: (basis_keys, Y)},  Y the Hermitian PSD dual of moment matrix M
 
         save() / load() use an npz without pickle: var and row keys must be ints, block keys
         JSON-serializable (tuples come back as tuples), Y is stored by its lower triangle.
@@ -229,7 +218,7 @@ class SDPWarmData:
             'block_keys': np.array([json.dumps(k) for k in self.y_psd], dtype=bytes),
         }
         for i, (rows, Y) in enumerate(self.y_psd.values()):
-            arrays[f'psd{i}_row_keys'] = keys(rows)
+            arrays[f'psd{i}_basis_keys'] = keys(rows)
             arrays[f'psd{i}_Y_lower'] = Y[np.tril_indices(len(rows))]
         np.savez(path, **arrays)
 
@@ -239,7 +228,7 @@ class SDPWarmData:
         y_psd = {}
         with np.load(path) as f:
             for i, block_key in enumerate(f['block_keys']):
-                rows = ints(f[f'psd{i}_row_keys'])
+                rows = ints(f[f'psd{i}_basis_keys'])
                 Y = np.zeros((len(rows), len(rows)), dtype=complex)
                 Y[np.tril_indices(len(rows))] = f[f'psd{i}_Y_lower']
                 y_psd[cls._tuples(json.loads(block_key))] = (rows, Y + np.tril(Y, -1).conj().T)
@@ -739,12 +728,12 @@ class ScsSDPSolver:
 
         y_psd = {}
         for k, block in enumerate(data.psd_blocks):
-            if block.block_key is None or block.row_keys is None:
-                raise ValueError(f'export_warm: PSD block {k} has no block_key or row_keys')
+            if block.block_key is None or block.basis_keys is None:
+                raise ValueError(f'export_warm: PSD block {k} has no block_key or basis_keys')
             if block.block_key in y_psd:
                 raise ValueError(f'export_warm: PSD block key {block.block_key!r} is not unique')
-            if len(block.row_keys) != block.dim or len(set(block.row_keys)) != block.dim:
-                raise ValueError(f'export_warm: PSD block {k} needs {block.dim} unique row_keys')
+            if len(block.basis_keys) != block.dim or len(set(block.basis_keys)) != block.dim:
+                raise ValueError(f'export_warm: PSD block {k} needs {block.dim} unique basis_keys')
 
             d, off = block.dim, layout['block_offsets'][k]
             if layout['block_cones'][k] == 's':
@@ -755,7 +744,7 @@ class ScsSDPSolver:
                 # Y_M = D Y_R D^H, D = diag(i^phi) with exact powers of i
                 w = np.array([1, 1j, -1, -1j])[np.mod(block.realify_phase, 4)]
                 Y = w[:, None] * Y * w.conj()[None, :]
-            y_psd[block.block_key] = (list(block.row_keys), Y)
+            y_psd[block.block_key] = (list(block.basis_keys), Y)
 
         return SDPWarmData(
             x=dict(zip(data.var_keys, self.scs_output['x'].tolist())),
@@ -796,8 +785,8 @@ class ScsSDPSolver:
         s[n_z:n_z + n_l] = np.maximum(r[n_z:n_z + n_l], 0.)
 
         for k, block in enumerate(data.psd_blocks):
-            if block.block_key is None or block.row_keys is None or len(block.row_keys) != block.dim:
-                raise ValueError(f'_import_warm: PSD block {k} has no block_key or row_keys')
+            if block.block_key is None or block.basis_keys is None or len(block.basis_keys) != block.dim:
+                raise ValueError(f'_import_warm: PSD block {k} has no block_key or basis_keys')
             d, off = block.dim, layout['block_offsets'][k]
             real = layout['block_cones'][k] == 's'
             rows = slice(off, off + (d * (d + 1) // 2 if real else d * d))
@@ -808,9 +797,9 @@ class ScsSDPSolver:
             if old is not None:
                 old_keys, Y_old = old
                 pos = {key: i for i, key in enumerate(old_keys)}
-                new_idx = [a for a, key in enumerate(block.row_keys) if key in pos]
+                new_idx = [a for a, key in enumerate(block.basis_keys) if key in pos]
                 if new_idx:
-                    old_idx = [pos[block.row_keys[a]] for a in new_idx]
+                    old_idx = [pos[block.basis_keys[a]] for a in new_idx]
                     Y[np.ix_(new_idx, new_idx)] = Y_old[np.ix_(old_idx, old_idx)]
             if block.realify_phase is not None:
                 # Y_R = D^H Y_M D, D = diag(i^phi) with exact powers of i

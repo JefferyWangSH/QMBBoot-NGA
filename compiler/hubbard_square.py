@@ -132,6 +132,7 @@ class HubbardSquareCompiler:
     var_cpx: bool = False
     var_index: dict[int, int]
     vars: list[MajoranaMonomialSquare]
+    _moments_lookup: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None
 
     ward_ops: dict[str, int]
 
@@ -140,7 +141,7 @@ class HubbardSquareCompiler:
     affines_mat: sp.sparse.csr_matrix
 
     hamil_op: MajoranaSquareOperator | None
-    _hamil_terms_at_site: list[list[tuple[int, float | complex, tuple[int, ...]]]]
+    _hamil_lookup: list[list[tuple[int, float | complex, tuple[int, ...]]]]
     number_op: MajoranaSquareOperator | None
 
     obj_op: MajoranaSquareOperator | None
@@ -180,7 +181,7 @@ class HubbardSquareCompiler:
             self.ward_ops['eta+'] = 0
 
         self.hamil_op = build_hamil(params)
-        self._hamil_terms_at_site = [[] for _ in range(self.n_sites)]
+        self._hamil_lookup = [[] for _ in range(self.n_sites)]
         for h_mono, h_coeff in self.hamil_op.terms.items():
             h_mask = h_mono.mask
             support = h_mask
@@ -196,7 +197,7 @@ class HubbardSquareCompiler:
                 bit = support & -support
                 site = (bit.bit_length() - 1) // 4
                 support &= ~(0xf << (4 * site))
-                self._hamil_terms_at_site[site].append((h_mask, self.n_sites * h_coeff, tuple(lower_masks)))
+                self._hamil_lookup[site].append((h_mask, self.n_sites * h_coeff, tuple(lower_masks)))
 
         self.number_op = build_number(params)
 
@@ -337,11 +338,6 @@ class HubbardSquareCompiler:
             return canon_key, canon_sign
         return canon_key
 
-    @staticmethod
-    def _moment(monomial1: MajoranaMonomialSquare, monomial2: MajoranaMonomialSquare):
-        monomial, sign = monomial1.mul(monomial2)
-        return monomial, sign * monomial1.dag_phase()
-
     def _compile_expr(self, op: MajoranaSquareOperator) -> LinearExpr | None:
         expr = {}
         for monomial, coeff in op.terms.items():
@@ -360,24 +356,77 @@ class HubbardSquareCompiler:
         return LinearExpr(terms=expr, const=0)
 
     def _build_vars(self):
+        r'''
+            build SDP variables in one pass over (O_b, O_a, r), r = dx*Ly + dy the translation by (dx, dy);
+            keep the lookup (b, a, r) -> (var_idx, coeff) with (T_r O_a)^\dag O_b = coeff * m[var_idx]
+            in self._moments_lookup for _build_psd, which only adds the Fourier phases
+        '''
         self.var_index = {}
         self.vars = []
+        # adjoints[a][r] = (N[T_r O_a], s) with (T_r O_a)^\dag = s * N[T_r O_a] and s = trans_sign * dag_phase
+        adjoints = []
+        for monomial in self.basis_reprs:
+            dag_phase = monomial.dag_phase()
+            translates = [monomial.translate(dx, dy) for dx in range(self.Lx) for dy in range(self.Ly)]
+            adjoints.append([(monomial_r, trans_sign * dag_phase) for monomial_r, trans_sign in translates])
 
-        for monomial1 in self.basis_reprs:
-            for dx in range(self.Lx):
-                for dy in range(self.Ly):
-                    monomial1r, _ = monomial1.translate(dx, dy)
-                    for monomial2 in self.basis_reprs:
-                        monomial, _ = self._moment(monomial1r, monomial2)
+        r'''
+            for each pair (O_a, O_b) we record a list of terms (r, var_idx, coeff), one per translation r:
 
-                        if not self._sym_allowed(monomial):
-                            continue
-                        key = self._sym_canon(monomial)
-                        if key is None:
-                            continue
-                        if key not in self.var_index:
-                            self.var_index[key] = len(self.vars)
-                            self.vars.append(MajoranaMonomialSquare(self.Lx, self.Ly, key))
+                (T_r O_a)^\dag O_b = coeff * m[var_idx],   coeff = +-1 or +-i;
+
+            an r whose product is not _sym_allowed or has _sym_canon None gives no term.
+
+            This is a 3d array [b, a, r] with the missing r removed, flattened to 1d (as in CSR):
+            the terms of all pairs are concatenated in the order (b, a, r) into three 1d arrays of the same length,
+
+                rs[t], idxs[t], coeffs[t]   (translation, variable index, coefficient),
+
+            and the terms of the pair (a, b) are t in [pair_offsets[k], pair_offsets[k] + pair_sizes[k]),
+            k = b*n + a, n = len(basis_reprs).
+
+            While building:
+                b_rs, b_idxs, b_coeffs   terms of the current O_b (all O_a), Python lists
+                rs, idxs, coeffs         one numpy chunk per O_b (converted after each O_b to save memory),
+                                         concatenated at the end
+                pair_offsets, pair_sizes index of the first term and number of terms of each pair, order b*n + a
+                n_terms                  number of terms before the current O_b
+        '''
+        pair_offsets, pair_sizes, rs, idxs, coeffs = [], [], [], [], []
+        n_terms = 0
+        for monomial_b in self.basis_reprs:
+            b_rs, b_idxs, b_coeffs = [], [], []
+            for a_adjoints in adjoints:
+                start = len(b_rs)
+                pair_offsets.append(n_terms + start)
+                for r, (monomial_ar, adj_sign) in enumerate(a_adjoints):
+                    monomial, mul_sign = monomial_ar.mul(monomial_b)
+
+                    if not self._sym_allowed(monomial):
+                        continue
+                    canon = self._sym_canon(monomial, sign=True)
+                    if canon is None:
+                        continue
+                    key, canon_sign = canon
+                    if key not in self.var_index:
+                        self.var_index[key] = len(self.vars)
+                        self.vars.append(MajoranaMonomialSquare(self.Lx, self.Ly, key))
+                    b_rs.append(r)
+                    b_idxs.append(self.var_index[key])
+                    b_coeffs.append(adj_sign * mul_sign * canon_sign / monomial.hermitian_phase())
+                pair_sizes.append(len(b_rs) - start)
+            rs.append(np.array(b_rs, dtype=np.int32))
+            idxs.append(np.array(b_idxs, dtype=np.int32))
+            coeffs.append(np.array(b_coeffs, dtype=complex))
+            n_terms += len(b_rs)
+
+        self._moments_lookup = (
+            np.array(pair_offsets, dtype=np.int64),
+            np.array(pair_sizes, dtype=np.int64),
+            np.concatenate(rs),
+            np.concatenate(idxs),
+            np.concatenate(coeffs),
+        )
 
     def _build_block_reprs(self):
         self.block_reprs = []
@@ -423,41 +472,36 @@ class HubbardSquareCompiler:
                         self.block_keys.append((q, f_parity, None))
 
     def _build_psd(self):
+        r'''
+            build momentum PSD blocks M(k) from self._moments_lookup of _build_vars:
+            M_{ab}(q) = \sum_r e^{iqr} / N * coeff * m[var_idx] over the list of the pair (a, b), N = Lx*Ly
+        '''
         self.psd_blocks = []
+        n_basis = len(self.basis_reprs)
+        n_vars = len(self.vars)
+        pair_offsets, pair_sizes, r_terms, var_terms, coeff_terms = self._moments_lookup
+        basis_index = {monomial.mask: a for a, monomial in enumerate(self.basis_reprs)}
 
         for q, block_key, block_basis in zip(self.block_momenta, self.block_keys, self.block_reprs):
+            dim = len(block_basis)
             psd = PSDConstraints(
-                n_vars=len(self.vars),
-                dim=len(block_basis),
+                n_vars=n_vars,
+                dim=dim,
                 block_key=block_key,
-                row_keys=[self.trans_canon(monomial) for monomial in block_basis],
+                basis_keys=[self.trans_canon(monomial) for monomial in block_basis],
             )
 
-            for row, monomial1 in enumerate(block_basis):
-                for col, monomial2 in enumerate(block_basis):
-                    expr = {}
-                    for dx in range(self.Lx):
-                        for dy in range(self.Ly):
-                            monomial1r, trans_sign = monomial1.translate(dx, dy)
-                            monomial, mul_sign = self._moment(monomial1r, monomial2)
+            phases = np.array([self.fourier_phase(q, (dx, dy)) / self.n_sites for dx in range(self.Lx) for dy in range(self.Ly)])
+            block_index = np.array([basis_index[monomial.mask] for monomial in block_basis])
+            pairs = (block_index[:, None] * n_basis + block_index[None, :]).ravel()
+            starts = pair_offsets[pairs]
+            counts = pair_sizes[pairs]
+            terms = np.arange(counts.sum()) + np.repeat(starts - (np.cumsum(counts) - counts), counts)
 
-                            if not self._sym_allowed(monomial):
-                                continue
-                            canon = self._sym_canon(monomial, sign=True)
-                            if canon is None:
-                                continue
-                            key, canon_sign = canon
-
-                            coeff = (
-                                self.fourier_phase(q, (dx, dy)) / self.n_sites
-                                * trans_sign * mul_sign * canon_sign
-                                / monomial.hermitian_phase()
-                            )
-                            idx = self.var_index[key]
-                            expr[idx] = expr.get(idx, 0) + coeff
-                            if abs(expr[idx]) < 1e-14:
-                                del expr[idx]
-                    psd.add(row, col, LinearExpr(terms=expr, const=0))
+            # COO terms of the affine map vec(M(q)) = A @ m;
+            psd.rows = np.repeat(np.arange(dim*dim), counts)
+            psd.cols = var_terms[terms]
+            psd.vals = phases[r_terms[terms]] * coeff_terms[terms]
 
             # at complex-conjugation invariant momenta (q = -q mod (Lx, Ly)),
             # K maps M(k) to itself and D^H M(k) D is real for D = diag(i^{n_a}),
@@ -478,7 +522,7 @@ class HubbardSquareCompiler:
                 site = (bit.bit_length() - 1) // 4
                 support &= ~(0xf << (4 * site))
 
-                for h_mask, _, _ in self._hamil_terms_at_site[site]:
+                for h_mask, _, _ in self._hamil_lookup[site]:
                     anticomm = (h_mask & var.mask).bit_count() & 1
                     if not anticomm:
                         continue
@@ -647,7 +691,7 @@ class HubbardSquareCompiler:
             site = (bit.bit_length() - 1) // 4
             support &= ~(0xf << (4 * site))
 
-            for h_mask, h_coeff, lower_masks in self._hamil_terms_at_site[site]:
+            for h_mask, h_coeff, lower_masks in self._hamil_lookup[site]:
                 if h_mask in seen:
                     continue
                 seen.add(h_mask)
@@ -668,7 +712,7 @@ class HubbardSquareCompiler:
             site = (bit.bit_length() - 1) // 4
             support &= ~(0xf << (4 * site))
 
-            for h_mask, h_coeff, lower_masks in self._hamil_terms_at_site[site]:
+            for h_mask, h_coeff, lower_masks in self._hamil_lookup[site]:
                 if h_mask in seen:
                     continue
                 seen.add(h_mask)
@@ -852,6 +896,7 @@ class HubbardSquareCompiler:
 
         self._build_block_reprs()
         self._build_psd()
+        self._moments_lookup = None
         self._build_affines()
 
     def descendants(self, monomial: MajoranaMonomialSquare):
