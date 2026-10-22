@@ -191,12 +191,48 @@ class AffineConstraints:
         if not prune or self.n_rows == 0:
             return mat, self.n_rows
 
-        mat_t = mat.T.tocsc()
+        # many rows are equal up to a scalar factor and _unique_rows keeps one row of each such class.
+        # this makes SPQR much cheaper which picks a linearly independent subset of the remaining rows.
+        unique = self._unique_rows(mat, tol=tol)
+        mat_t = mat[unique].T.tocsc()
         mat_t.indices = mat_t.indices.astype(np.int64, copy=False)
         mat_t.indptr = mat_t.indptr.astype(np.int64, copy=False)
         r, piv = spqr.spqr(mat_t, mode='r', tol=tol)
         rank = int(np.count_nonzero(np.abs(r.diagonal()) > tol))
-        return mat[sorted(piv[:rank])], rank
+        return mat[np.sort(unique[piv[:rank]])], rank
+
+    @staticmethod
+    def _unique_rows(mat: sp.sparse.csr_matrix, tol: float = 1e-12) -> np.ndarray:
+        '''
+            indices of the nonzero rows of mat, keeping only the first of rows that differ by
+            a scalar factor: each row is divided by its entry of largest |value| (the first one on ties),
+            rounded to multiples of tol, and compared by its columns and values
+        '''
+        mat = mat.tocsr(copy=True)
+        mat.sum_duplicates()
+        mat.eliminate_zeros()
+        nnz = np.diff(mat.indptr)
+        rows = np.flatnonzero(nnz)
+        starts = mat.indptr[rows]
+        row_of = np.repeat(np.arange(mat.shape[0]), nnz)
+
+        # divide each row by its entry of largest |value| and round
+        absval = np.abs(mat.data)
+        row_max = np.zeros(mat.shape[0])
+        row_max[rows] = np.maximum.reduceat(absval, starts)
+        pivot = np.minimum.reduceat(np.where(absval == row_max[row_of], np.arange(mat.nnz), mat.nnz), starts)
+        scale = np.ones(mat.shape[0])
+        scale[rows] = mat.data[pivot]
+        values = np.round(mat.data / scale[row_of] / tol).astype(np.int64)
+
+        seen, unique = set(), []
+        for i in rows:
+            a, b = mat.indptr[i], mat.indptr[i + 1]
+            key = (mat.indices[a:b].tobytes(), values[a:b].tobytes())
+            if key not in seen:
+                seen.add(key)
+                unique.append(i)
+        return np.array(unique, dtype=np.int64)
 
 
 @dataclass(slots=True)
@@ -671,7 +707,7 @@ class ScsSDPSolver:
             # vec(X) = A_k x + C_k,  X the lower triangle of R if realify_phase is set, else of M;
             # svec / cvec take (X_ij + X_ji)/sqrt(2) for i > j,
             # so the off-diagonal entries are doubled to give sqrt(2) M_ij
-            A_k, C_k = block.affine_map(realify=block.realify_phase is not None)
+            A_k, C_k = block.affine_map(realify=block.realify_phase is not None, full=False)
             idx = np.arange(d * d)
             double = np.where(idx % d == idx // d, 1., 2.)
             A_k = sp.sparse.diags(double) @ sp.sparse.csr_matrix(A_k, dtype=complex)
