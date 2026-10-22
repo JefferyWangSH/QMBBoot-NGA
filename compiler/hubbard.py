@@ -325,6 +325,7 @@ class HubbardCompiler:
                 (T_r O_a)^\dag O_b = coeff * m[var_idx],   coeff = +-1 or +-i;
 
             an r whose product is not _sym_allowed or has _sym_canon None gives no term.
+            Only the pairs a >= b (lower triangle) are recorded because M(q) is Hermitian.
 
             This is a 3d array [b, a, r] with the missing r removed, flattened to 1d (as in CSR):
             the terms of all pairs are concatenated in the order (b, a, r) into three 1d arrays of the same length,
@@ -343,11 +344,15 @@ class HubbardCompiler:
         '''
         pair_offsets, pair_sizes, rs, idxs, coeffs = [], [], [], [], []
         n_terms = 0
-        for monomial_b in self.basis_reprs:
+        for b, monomial_b in enumerate(self.basis_reprs):
             b_rs, b_idxs, b_coeffs = [], [], []
-            for a_adjoints in adjoints:
+            for a, a_adjoints in enumerate(adjoints):
                 start = len(b_rs)
                 pair_offsets.append(n_terms + start)
+                if a < b:
+                    # lower triangle only
+                    pair_sizes.append(0)
+                    continue
                 for r, (monomial_ar, adj_sign) in enumerate(a_adjoints):
                     monomial, mul_sign = monomial_ar.mul(monomial_b)
 
@@ -429,7 +434,8 @@ class HubbardCompiler:
     def _build_psd(self):
         r'''
             build momentum PSD blocks M(k) from self._moments_lookup of _build_vars:
-            M_{ab}(q) = \sum_r e^{iqr} / L * coeff * m[var_idx] over the list of the pair (a, b)
+            M_{ab}(q) = \sum_r e^{iqr} / L * coeff * m[var_idx] over the list of the pair (a, b),
+            for the lower triangle only
         '''
         self.psd_blocks = []
         n_basis = len(self.basis_reprs)
@@ -448,14 +454,18 @@ class HubbardCompiler:
             )
 
             phases = np.array([self.fourier_phase(q, r) / self.L for r in range(self.L)])
+            # block_basis keeps the order of basis_reprs, so the lower triangle (row >= col) has a >= b
             block_index = np.array([basis_index[monomial.mask] for monomial in block_basis])
-            pairs = (block_index[:, None] * n_basis + block_index[None, :]).ravel()
+            if np.any(np.diff(block_index) <= 0):
+                raise ValueError('block_basis must follow the order of basis_reprs without duplicates')
+            rows, cols = np.tril_indices(dim)
+            pairs = block_index[cols] * n_basis + block_index[rows]
             starts = pair_offsets[pairs]
             counts = pair_sizes[pairs]
             terms = np.arange(counts.sum()) + np.repeat(starts - (np.cumsum(counts) - counts), counts)
 
-            # COO terms of the affine map vec(M(q)) = A @ m;
-            psd.rows = np.repeat(np.arange(dim*dim), counts)
+            # COO terms of the affine map vec(M(q)) = A @ m, lower triangle
+            psd.rows = np.repeat(rows + cols*dim, counts)
             psd.cols = var_terms[terms]
             psd.vals = phases[r_terms[terms]] * coeff_terms[terms]
 
