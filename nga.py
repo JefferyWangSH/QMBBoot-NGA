@@ -194,7 +194,7 @@ class NGARunner:
     def diagonalize(self):
         self.psd_eigvals = []
         self.psd_eigvecs = []
-        for gram in self.solver.psd_values():
+        for gram in self.solver.psd_primals():
             eigvals, eigvecs = np.linalg.eigh(gram)
             self.psd_eigvals.append(eigvals)
             self.psd_eigvecs.append(eigvecs)

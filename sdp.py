@@ -105,7 +105,18 @@ class PSDConstraints:
     block_key: object = None
     basis_keys: list | None = None
 
-    def affine_map(self, realify: bool = False, full: bool = False, tol: float = 1e-14) -> tuple[sp.sparse.csc_matrix, np.ndarray]:
+    def realify_diag(self) -> np.ndarray:
+        '''
+            d with D = diag(d) = diag(i^{phi_i}), exact powers of i, so that R = D^H M D
+        '''
+        if self.realify_phase is None:
+            raise ValueError('realify_phase is not set')
+        phi = np.asarray(self.realify_phase, dtype=np.int64)
+        if phi.shape != (self.dim,):
+            raise ValueError(f'realify_phase has shape {phi.shape}, expected ({self.dim},)')
+        return np.array([1, 1j, -1, -1j])[phi % 4]
+
+    def affine_map(self, realify: bool = False, full: bool = False, tol: float = 1e-14) -> tuple[sp.sparse.csr_matrix, np.ndarray]:
         '''
             sparse A_{ij,k} of shape (dim^2, n_vars) and dense C_{ij} of shape (dim^2,),
             such that vec(X) = A @ m + C with column-major vec (idx = i + j*dim), where
@@ -139,7 +150,7 @@ class PSDConstraints:
             const_vals = np.concatenate([const_vals, const_vals[off].conj()])
 
         shape = (self.dim*self.dim, self.n_vars)
-        A = sp.sparse.csc_matrix((vals, (rows, cols)), shape=shape)
+        A = sp.sparse.csr_matrix((vals, (rows, cols)), shape=shape)
         A.data[np.abs(A.data) < tol] = 0
         A.eliminate_zeros()
         C = np.zeros(self.dim*self.dim, dtype=np.result_type(vals, const_vals, float))
@@ -147,20 +158,15 @@ class PSDConstraints:
         if not realify:
             return A, C
 
-        phi = np.asarray(self.realify_phase, dtype=np.int64)
-        if phi.shape != (self.dim,):
-            raise ValueError(f'realify_phase has shape {phi.shape}, expected ({self.dim},)')
+        # R_ij = conj(d_i) d_j M_ij at idx = i + j*dim
+        d = self.realify_diag()
+        scale = np.outer(d.conj(), d).ravel(order='F')
 
-        # exact powers of i, no complex exponentiation
-        idx = np.arange(self.dim*self.dim)
-        powers = np.array([1, 1j, -1, -1j])
-        scale = powers[(phi[idx // self.dim] - phi[idx % self.dim]) % 4]
-
-        A = (sp.sparse.diags(scale) @ A).tocsc()
+        A = (sp.sparse.diags(scale) @ A).tocsr()
         C = scale * C
         if np.any(A.data.imag != 0) or np.any(C.imag != 0):
             raise ValueError('D^H M D is not real for the given realify_phase')
-        return sp.sparse.csc_matrix(A.real), np.ascontiguousarray(C.real)
+        return sp.sparse.csr_matrix(A.real), np.ascontiguousarray(C.real)
 
 
 @dataclass(slots=True)
@@ -300,9 +306,11 @@ class SDPWarmData:
 
 
 class SDPSolver:
+    SOLVED = ('optimal', 'optimal_inaccurate')
+
     def __init__(self):
+        self.data = None
         self.vars = None
-        self.psd_exprs = None
         self.constraints = None
         self.problem = None
         self.objective = None
@@ -317,34 +325,76 @@ class SDPSolver:
             res += coeff * self.vars[idx]
         return res
 
+    @staticmethod
+    def _real_embedding(A, C, d):
+        r'''
+            affine map of the real embedding
+
+                E(M) = [[Re M, -Im M],
+                        [Im M,  Re M]]   (2d x 2d, real symmetric for Hermitian M),
+
+            vec(E) = A_E @ m + C_E, from vec(M) = A @ m + C (column-major vec);
+            M >= 0 <=> E(M) >= 0.
+        '''
+        n = 2 * d
+        m = np.arange(d * d)
+        i, j = m % d, m // d
+        e = lambda a, b: (i + a * d) + (j + b * d) * n   # vec index of E in quadrant (a, b)
+        ones = np.ones(d * d)
+        P_re = sp.sparse.csr_matrix(
+            (np.concatenate([ones, ones]), (np.concatenate([e(0, 0), e(1, 1)]), np.concatenate([m, m]))),
+            shape=(n * n, d * d),
+        )
+        P_im = sp.sparse.csr_matrix(
+            (np.concatenate([ones, -ones]), (np.concatenate([e(1, 0), e(0, 1)]), np.concatenate([m, m]))),
+            shape=(n * n, d * d),
+        )
+        A_E = P_re @ sp.sparse.csr_matrix(A.real) + P_im @ sp.sparse.csr_matrix(A.imag)
+        A_E.eliminate_zeros()
+        C_E = P_re @ np.real(C) + P_im @ np.imag(C)
+        return sp.sparse.csr_matrix(A_E), C_E
+
     def build(self, data: SDPData):
         import cvxpy as cp
+
+        self.data = data
+        self.status = None
 
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ variables
         if data.var_cpx:
             raise NotImplementedError('build: complex moment variables are not supported')
         self.vars = cp.Variable(data.n_vars, complex=data.var_cpx, name='vars')
-        self.constraints = []
+        self.constraints = {'psd': [], 'eq': [], 'ineq': []}
 
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ PSD constraints
-        self.psd_exprs = []
         for block in data.psd_blocks:
-            # moment matrix M kept for psd_values(); cvxpy needs the full Hermitian matrix
-            A, C = block.affine_map(realify=False, full=True)
-            expr = cp.reshape(A @ self.vars + cp.Constant(C), (block.dim, block.dim), order='F')
-            self.psd_exprs.append(expr)
-
-            # R = D^H M D (real) if a realify phase is given: M >= 0 <=> R >= 0,
-            # and a real block is not doubled by cvxpy's complex-to-real embedding
-            if block.realify_phase is not None:
-                A, C = block.affine_map(realify=True, full=True)
-                expr = cp.reshape(A @ self.vars + cp.Constant(C), (block.dim, block.dim), order='F')
-            self.constraints.append(expr >> 0)
+            # cvxpy needs the full Hermitian matrix. Every block is passed as a real PSD constraint:
+            #   - R = D^H M D        if a realify phase is given (M >= 0 <=> R >= 0)
+            #   - M                  if its coefficients are real
+            #   - E(M)               otherwise, the real embedding [[Re M, -Im M], [Im M, Re M]]
+            #
+            # We build E(M) ourselves instead of passing the complex M to cvxpy: cvxpy embeds it the
+            # same way, but recovers the dual wrongly. From the dual Z of E(M) >= 0,
+            #   - cvxpy returns     Z_11 + i Z_21
+            #   - the multiplier is Z_11 + Z_22 + i (Z_21 - Z_12)   (see psd_duals)
+            # They agree (up to a factor 2) only if Z commutes with J = [[0, -I], [I, 0]], i.e.
+            # Z = [[A, -B], [B, A]]. The part of Z anticommuting with J does not enter tr(Z E(M)),
+            # so the solver may return any of it: interior-point MOSEK returns ~0, SCS does not.
+            A, C = block.affine_map(realify=block.realify_phase is not None, full=True)
+            dim = block.dim
+            if np.iscomplexobj(A.data) or np.iscomplexobj(C):
+                if np.any(A.data.imag != 0) or np.any(C.imag != 0):
+                    A, C = self._real_embedding(A, C, dim)
+                    dim = 2 * dim
+                else:
+                    A, C = sp.sparse.csr_matrix(A.real), np.ascontiguousarray(C.real)
+            expr = cp.reshape(A @ self.vars + cp.Constant(C), (dim, dim), order='F')
+            self.constraints['psd'].append(expr >> 0)
 
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ affine constraints
         if data.affines_mat.shape[0] > 0:
             m_aug = cp.hstack([self.vars, cp.Constant([1.])])
-            self.constraints.append(data.affines_mat @ m_aug == 0)
+            self.constraints['eq'].append(data.affines_mat @ m_aug == 0)
 
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ objective
         obj = self._to_cp_expr(data.objective)
@@ -364,7 +414,7 @@ class SDPSolver:
             expr = self._to_cp_expr(ineq)
             if expr.is_complex():
                 expr = cp.real(expr)
-            self.constraints.append(expr >= 0)
+            self.constraints['ineq'].append(expr >= 0)
 
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ uncertified observables
         self.observables = {}
@@ -375,7 +425,10 @@ class SDPSolver:
                 self.observables[name] = self._to_cp_expr(obs)
 
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ problem
-        self.problem = cp.Problem(self.objective, self.constraints)
+        self.problem = cp.Problem(
+            self.objective,
+            [con for cons in self.constraints.values() for con in cons],
+        )
         return self.problem
 
     def solve(self, backend: str = 'SCS', warm_start: SDPWarmData | None = None, **kwargs):
@@ -391,19 +444,57 @@ class SDPSolver:
         self.status = self.problem.status
         return value
 
-    def psd_values(self) -> list[np.ndarray]:
+    def psd_primals(self) -> list[np.ndarray]:
         '''
-            PSD blocks M_k at the current solution, each a (dim, dim) matrix
+            PSD primals M_k at the current solution, each a Hermitian (dim, dim) matrix
         '''
-        if self.status is None:
-            raise ValueError('problem has not been solved')
-        return [expr.value for expr in self.psd_exprs]
+        if self.status not in self.SOLVED:
+            raise ValueError(f'no solution available (status: {self.status})')
+        x = self.vars.value
+        primals = []
+        for block in self.data.psd_blocks:
+            A, C = block.affine_map(realify=False, full=True)
+            primals.append((A @ x + C).reshape((block.dim, block.dim), order='F'))
+        return primals
+
+    def psd_duals(self) -> list[np.ndarray]:
+        r'''
+            PSD duals Y_k of the moment matrices M_k at the current solution,
+            each a Hermitian (dim, dim) matrix, recovered from the dual Z of the real PSD
+            constraint passed to cvxpy for each block (see build):
+
+              - M real:          Y = Z
+              - R = D^H M D:     Y = D Z D^H,   D = diag(i^phi)
+              - E(M) = [[Re M, -Im M], [Im M, Re M]] for complex M:
+
+                    Y = U^H Z U = Z_11 + Z_22 + i (Z_21 - Z_12),   U = [I; -iI],
+
+                which is the multiplier of M >= 0 since Re tr(Y M) = tr(Z E(M)).
+                It is Hermitian and PSD for any Z >= 0 (a congruence).
+        '''
+        if self.status not in self.SOLVED:
+            raise ValueError(f'no solution available (status: {self.status})')
+        duals = []
+        for k, (block, con) in enumerate(zip(self.data.psd_blocks, self.constraints['psd'], strict=True)):
+            if con.dual_value is None:
+                raise ValueError(f'psd_duals: no dual value for PSD block {k} (status: {self.status})')
+            Z = np.asarray(con.dual_value)
+            d = block.dim
+            if Z.shape == (2 * d, 2 * d):
+                Y = Z[:d, :d] + Z[d:, d:] + 1j * (Z[d:, :d] - Z[:d, d:])
+            else:
+                Y = Z
+            if block.realify_phase is not None:
+                w = block.realify_diag()
+                Y = w[:, None] * Y * w.conj()[None, :]
+            duals.append(Y)
+        return duals
 
     def summary(self):
         assert self.problem is not None and self.status is not None
         return {
             'n_vars': self.vars.shape[0],
-            'n_constraints': len(self.constraints),
+            'n_constraints': sum(len(cons) for cons in self.constraints.values()),
             'status': self.problem.status,
             'value': self.problem.value,
             'objective_sense': self.objective_sense,
@@ -421,7 +512,7 @@ class ScsSDPSolver:
     '''
         SDP solver calling scs-qmbboot (scs_qmbboot) directly with native complex PSD cones.
         It shares the same interface as SDPSolver:
-        build(data), solve(backend, **kwargs), summary(), psd_values().
+        build(data), solve(backend, **kwargs), summary(), psd_primals(), psd_duals().
     '''
 
     name = 'SCS_QMBBOOT'
@@ -491,18 +582,49 @@ class ScsSDPSolver:
             raise RuntimeError(f"SCS failed: {info['status']} (status_val {info['status_val']})")
         return self._value()
 
-    def psd_values(self) -> list[np.ndarray]:
+    def psd_primals(self) -> list[np.ndarray]:
         '''
-            PSD blocks M_k = C_k + A_k x at the current solution, each a (dim, dim) matrix
+            PSD primals M_k = C_k + A_k x at the current solution, each a Hermitian (dim, dim) matrix
         '''
         if self.status not in self.SOLVED:
             raise ValueError(f'no solution available (status: {self.status})')
         x = self.scs_output['x']
-        values = []
+        primals = []
         for block in self.data.psd_blocks:
             A, C = block.affine_map(realify=False, full=True)
-            values.append((A @ x + C).reshape((block.dim, block.dim), order='F'))
-        return values
+            primals.append((A @ x + C).reshape((block.dim, block.dim), order='F'))
+        return primals
+
+    def psd_duals(self) -> list[np.ndarray]:
+        r'''
+            PSD duals Y_k of the moment matrices M_k at the current solution,
+            each a Hermitian (dim, dim) matrix, recovered from the dual Z of the PSD cone
+            of each block (see _to_scs), Z = smat(y_k) (cone s) or cmat(y_k) (cone cs):
+
+              - M:               Y = Z
+              - R = D^H M D:     Y = D Z D^H,   D = diag(i^phi)
+
+            Z is the multiplier of X >= 0 with X = M or R
+            since <smat(u), X> = u^T svec(X) and Re <cmat(u), X> = u^T cvec(X).
+        '''
+        if self.status not in self.SOLVED:
+            raise ValueError(f'no solution available (status: {self.status})')
+        _, _, layout = self.problem
+        y = self.scs_output['y']
+        duals = []
+        for k, block in enumerate(self.data.psd_blocks):
+            d, off = block.dim, layout['block_offsets'][k]
+            if layout['block_cones'][k] == 's':
+                Z = self._smat(y[off:off + d * (d + 1) // 2], d)
+            else:
+                Z = self._cmat(y[off:off + d * d], d)
+            if block.realify_phase is not None:
+                w = block.realify_diag()
+                Y = w[:, None] * Z * w.conj()[None, :]
+            else:
+                Y = Z
+            duals.append(Y)
+        return duals
 
     def _value(self):
         # as cvxpy: +inf (min) / -inf (max) if infeasible, the opposite if unbounded
@@ -772,28 +894,18 @@ class ScsSDPSolver:
         if len(set(data.var_keys)) != data.n_vars:
             raise ValueError('export_warm: SDPData.var_keys are not unique')
 
-        _, cone, layout = self.problem
+        _, cone, _ = self.problem
         y = self.scs_output['y']
         n_z, n_l = cone['z'], cone['l']
 
         y_psd = {}
-        for k, block in enumerate(data.psd_blocks):
+        for k, (block, Y) in enumerate(zip(data.psd_blocks, self.psd_duals(), strict=True)):
             if block.block_key is None or block.basis_keys is None:
                 raise ValueError(f'export_warm: PSD block {k} has no block_key or basis_keys')
             if block.block_key in y_psd:
                 raise ValueError(f'export_warm: PSD block key {block.block_key!r} is not unique')
             if len(block.basis_keys) != block.dim or len(set(block.basis_keys)) != block.dim:
                 raise ValueError(f'export_warm: PSD block {k} needs {block.dim} unique basis_keys')
-
-            d, off = block.dim, layout['block_offsets'][k]
-            if layout['block_cones'][k] == 's':
-                Y = self._smat(y[off:off + d * (d + 1) // 2], d)
-            else:
-                Y = self._cmat(y[off:off + d * d], d)
-            if block.realify_phase is not None:
-                # Y_M = D Y_R D^H, D = diag(i^phi) with exact powers of i
-                w = np.array([1, 1j, -1, -1j])[np.mod(block.realify_phase, 4)]
-                Y = w[:, None] * Y * w.conj()[None, :]
             y_psd[block.block_key] = (list(block.basis_keys), Y)
 
         return SDPWarmData(
@@ -852,8 +964,8 @@ class ScsSDPSolver:
                     old_idx = [pos[block.basis_keys[a]] for a in new_idx]
                     Y[np.ix_(new_idx, new_idx)] = Y_old[np.ix_(old_idx, old_idx)]
             if block.realify_phase is not None:
-                # Y_R = D^H Y_M D, D = diag(i^phi) with exact powers of i
-                w = np.array([1, 1j, -1, -1j])[np.mod(block.realify_phase, 4)]
+                # Y_R = D^H Y_M D
+                w = block.realify_diag()
                 Y = w.conj()[:, None] * Y * w[None, :]
 
             # s: projection of Herm X(x) onto the PSD cone
