@@ -974,9 +974,9 @@ class HubbardCompiler:
         r'''
             calculate
 
-                C_a = [H, O_a(0)] = \sum_{b,s} C_{ab}(s) T_s O'(0)_b
+                [H, O_a(0)] = \sum_{\mu,s} C_{a\mu}(s) T_s O_\mu(0)
 
-            as entry list [(O'(0)_b, s, C_{ab}(s)), ...]
+            as a list [(O_\mu(0), s, coeff), ...]
         '''
         if not hasattr(self, '_descendants_cache'):
             self._descendants_cache = LRU(_CACHE_MAX_SIZE)

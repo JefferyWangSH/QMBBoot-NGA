@@ -27,9 +27,8 @@ if __name__ == '__main__':
                 'eps': 1e-5,
                 'max_iters': 5000
             },
-            drop_null_tol=1e-5,
-            grow_null_tol=1e-5,
             max_drop_leverage=5e-2,
+            warm_start=False,
         ),
         scheduler=BaseScheduler(
             net_growth_min=1,

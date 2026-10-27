@@ -26,9 +26,8 @@ if __name__ == '__main__':
         nga_params=NGAParams(
             solver_backend='SCS_QMBBOOT',
             solver_kwargs={'eps': eps},
-            drop_null_tol=eps,
-            grow_null_tol=eps,
             max_drop_leverage=5e-2,
+            warm_start=False,
         ),
         scheduler=BaseScheduler(
             net_growth_min=1,
@@ -74,7 +73,7 @@ if __name__ == '__main__':
             flush=True,
         )
 
-        runner.diagonalize()
+        runner.load_psd_duals()
         runner.propose_pruning()
         runner.propose_growth()
         runner.update()

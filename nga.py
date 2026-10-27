@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields
 import time
 
 import numpy as np
@@ -8,20 +8,11 @@ import scipy as sp
 class NGAParams:
     solver_backend: str = 'MOSEK'
     solver_kwargs: dict = field(default_factory=dict)
-    drop_null_tol: float = 1e-9
-    grow_null_tol: float = 1e-9
     max_drop_leverage: float = 1e-2
     warm_start: bool = False
 
     def to_dict(self):
-        return {
-            'solver_backend': self.solver_backend,
-            'solver_kwargs': dict(self.solver_kwargs),
-            'drop_null_tol': self.drop_null_tol,
-            'grow_null_tol': self.grow_null_tol,
-            'max_drop_leverage': self.max_drop_leverage,
-            'warm_start': self.warm_start,
-        }
+        return asdict(self)
 
 @dataclass(slots=True)
 class NGARecord:
@@ -35,10 +26,6 @@ class NGARecord:
     psd_dims: list[int] | None = None
     n_vars: int | None = None
     affine_rank: int | None = None
-    drop_null_count: int | None = None
-    grow_null_count: int | None = None
-    max_drop_null_eigval: float | None = None
-    max_grow_null_eigval: float | None = None
     to_drop: int | None = None
     to_grow: int | None = None
     net_growth: int | None = None
@@ -131,8 +118,8 @@ class NGARunner:
         self._reset_record()
         self.history = []
 
-        self.psd_eigvals = []
-        self.psd_eigvecs = []
+        # scaled PSD duals such that \sum_b tr Y(b) = 1
+        self.psd_duals = []
 
         # lower-index candidates have higher priority
         self.to_drop = []
@@ -191,67 +178,33 @@ class NGARunner:
         if self.nga_params.warm_start and self.solver.status in ('optimal', 'optimal_inaccurate'):
             self.warm_data = self.solver.export_warm()
 
-    def diagonalize(self):
-        self.psd_eigvals = []
-        self.psd_eigvecs = []
-        for gram in self.solver.psd_primals():
-            eigvals, eigvecs = np.linalg.eigh(gram)
-            self.psd_eigvals.append(eigvals)
-            self.psd_eigvecs.append(eigvecs)
+    def load_psd_duals(self):
+        self.psd_duals = []
+        if self.record.status is None:
+            raise ValueError('solve the SDP first')
+        psd_duals = self.solver.psd_duals()
+        psd_trace = sum(np.trace(Y).real for Y in psd_duals)
+        if not psd_trace > 0:
+            raise ValueError(f'PSD duals have a non-positive total trace {psd_trace:.3e}')
+        self.psd_duals = [Y / psd_trace for Y in psd_duals]
 
     def propose_pruning(self):
-        if not self.psd_eigvals or not self.psd_eigvecs:
-            raise ValueError('diagonalize psd blocks first')
+        if not self.psd_duals:
+            raise ValueError('load PSD duals first')
         self._update_scheduler()
 
         r'''
-            A null vector v_{k,\alpha} of M(k) defines
+            b = (k, p) labels a PSD block M(b) of the SDP, with momentum k and parities p.
+            The dual-weighted leverage of O_a is
 
-                P_{k,\alpha}
-                    = L^{-1/2} \sum_a \sum_r [v_{k,\alpha}]_a e^{-i k r} T_r O_a
-                    = \sum_{a,r} [v'_{k,\alpha}]_{a,r} T_r O_a,
+                \ell_a = \sum_b [Y(b)]_{aa},
 
-            with [v'_{k,\alpha}]_{a,r} = L^{-1/2} [v_{k,\alpha}]_a e^{-i k r} the real-space null vector.
-            \alpha enumerates the null vectors of M(k).
-            The leverage of O_a in the moment nullspace is
-
-                l_a = |N_null|^{-1} \sum_{k,\alpha} \sum_r |[v'_{k,\alpha}]_{a,r}|^2,
-
-            so that \sum_a l_a = 1. In terms of momentum-space null vectors,
-            l_a is equivalently computed as
-
-                l_a = |N_null|^{-1} \sum_{k,\alpha} |[v_{k,\alpha}]_a|^2,
-
-            which is implemented as below.
+            where the PSD duals Y(b) are scaled such that \sum_b tr Y(b) = 1.
         '''
-
         leverage = np.zeros(len(self.basis_reprs))
-        null_eigvals = []
-
-        for block_reprs, eigvals, eigvecs in zip(
-            self.compiler.block_reprs,
-            self.psd_eigvals,
-            self.psd_eigvecs,
-        ):
-            null_mask = np.abs(eigvals) <= self.nga_params.drop_null_tol
-            if np.count_nonzero(null_mask) == 0:
-                continue
-
-            block_leverage = np.sum(np.abs(eigvecs[:, null_mask])**2, axis=1)
-            null_eigvals.extend(eigvals[null_mask])
-            for rep, score in zip(block_reprs, block_leverage):
-                idx = self.basis_indices[self._canon(rep)]
-                leverage[idx] += float(score)
-
-        null_count = len(null_eigvals)
-        if null_count == 0:
-            self.to_drop = []
-            self.record.drop_null_count = 0
-            self.record.max_drop_null_eigval = None
-            return self.to_drop
-
-        leverage /= null_count
-        max_null_eigval = float(np.max(null_eigvals)) if null_eigvals else None
+        for block_reprs, Y in zip(self.compiler.block_reprs, self.psd_duals, strict=True):
+            indices = [self.basis_indices[self._canon(rep)] for rep in block_reprs]
+            np.add.at(leverage, indices, Y.diagonal().real)
 
         cands = [
             (score, self._canon(rep))
@@ -259,118 +212,62 @@ class NGARunner:
             if self._canon(rep) not in self.required_basis_keys
             and score < self.nga_params.max_drop_leverage
         ]
-        # sort by increasing nullspace leverage
+        # sort by increasing leverage
         cands.sort()
         self.to_drop = [key for _, key in cands[:self.scheduler.drop_cap]]
-
-        self.record.drop_null_count = null_count
-        self.record.max_drop_null_eigval = max_null_eigval
         return self.to_drop
 
     def propose_growth(self):
-        if not self.psd_eigvals or not self.psd_eigvecs:
-            raise ValueError('diagonalize psd blocks first')
+        if not self.psd_duals:
+            raise ValueError('load PSD duals first')
 
         target_growth = len(self.to_drop) + self.scheduler.net_growth_cap
 
         r'''
-            self.compiler.descendants(rep) calculates
+            The dual-weighted growth score of a descendant \tilde O_\mu missing in the current basis is
 
-                [H, O_a] = \sum_{b,s} C_{ab}(s) T_s O'_b.
+                s_\mu = \sum_b [D(b) Y(b) D(b)^\dag]_{\mu\mu},
 
-            Therefore, in terms of real-space null vectors,
+            where D_{\mu a}(b) = \sum_s e^{i k s} C_{a\mu}(s) for b = (k, p),
+            and C_{a\mu}(s) are the expansion coefficients of the Hamiltonian dynamics of O_a(0)
+            with the current operator space projected out,
 
-                (1-\Pi)[H, P_{k,\alpha}]
-                    = \sum_{a,b,r,s} [v'_{k,\alpha}]_{a,r} C_{ab}(s) T_{r+s} O'_b
-                    = \sum_{a,b,r,s} [v'_{k,\alpha}]_{a,r} C_{ab}(s-r) T_s O'_b
-                    = \sum_{b,s} w'_{k,\alpha,b,s} T_s O'_b
-
-            with w'_{k,\alpha,b,s} = \sum_{a,r} [v'_{k,\alpha}]_{a,r} C_{ab}(s-r).
-            O'_b now enumerates the descendants that are missing in the current operator basis.
-            By definition, the growth score is
-
-                s_b = |N_null|^{-1} \sum_{k,\alpha,s} |w'_{k,\alpha,b,s}|^2.
-
-            The code works with the momentum-space null vectors [v_{k,\alpha}]_a so that
-
-                (1-\Pi)[H, P_{k,\alpha}]
-                    = \sum_{a,b,r,s} [v'_{k,\alpha}]_{a,r} C_{ab}(s) T_{r+s} O'_b
-                    = \sum_{a,b,s} [v_{k,\alpha}]_a e^{i k s} C_{ab}(s) O'_b(k).
-
-            Writing [D^k]_{ba} = \sum_s e^{i k s} C_{ab}(s) and [v^k]_{a,\alpha} = [v_{k,\alpha}]_a gives
-
-                (1-\Pi)[H, P_{k,\alpha}]
-                    = \sum_{a,b} [D^k]_{ba} [v^k]_{a,\alpha} O'_b(k)
-                    = \sum_b [D^k @ v^k]_{b,\alpha} O'_b(k).
-
-            where we define
-
-                w_{k,\alpha,b}
-                    = [D^k @ v^k]_{b,\alpha}
-                    = \sum_{a,s} [v_{k,\alpha}]_a e^{i k s} C_{ab}(s)
-
-            and the growth score
-
-                s_b = |N_null|^{-1} \sum_{k,\alpha} |w_{k,\alpha,b}|^2.
-
-            The two scores are identical by noting that
-
-                w'_{k,\alpha,b,s}
-                    = \sum_{a,r} L^{-1/2} [v_{k,\alpha}]_a e^{-i k r} C_{ab}(s-r)
-                    = \sum_{a,r} L^{-1/2} [v_{k,\alpha}]_a e^{-i k (s-r)} C_{ab}(r)
-                    = L^{-1/2} e^{-i k s} w_{k,\alpha,b},
-
-            and \sum_s |w'_{k,\alpha,b,s}|^2 = |w_{k,\alpha,b}|^2.
+                (1 - \Pi)[H, O_a(0)] = \sum_{\mu,s} C_{a\mu}(s) \tilde O_\mu(s).
         '''
-
         cand_scores = {} # candidate key to its growth score
         cand_reps = {}   # candidate key to its operator representative
-        null_eigvals = []
 
-        for q, block_reprs, eigvals, eigvecs in zip(
+        for q, block_reprs, Y in zip(
             self.compiler.block_momenta,
             self.compiler.block_reprs,
-            self.psd_eigvals,
-            self.psd_eigvecs,
+            self.psd_duals,
+            strict=True,
         ):
-            null_mask = np.abs(eigvals) <= self.nga_params.grow_null_tol
-            if np.count_nonzero(null_mask) == 0:
-                continue
-
-            null_eigvals.extend(eigvals[null_mask])
-            null_eigvecs = eigvecs[:, null_mask]
-
-            r'''
-                sparse descendant matrix [D^k]_{ba} = \sum_s e^{i k s} C_{ab}(s)
-                and self.compiler.descendants(rep) returns
-
-                    [H, O_a(0)] = \sum_{b,s} C_{ab}(s) T_s O'(0)_b
-
-                as a list [(O'(0)_b, s, C_{ab}(s)), ...].
-            '''
+            # self.compiler.descendants(O_a) returns all terms of [H, O_a(0)]
+            # as a list [(O_\mu(0), s, coeff), ...].
             desc_keys = [] # descendants keys
-            desc_rows = {} # descendant key to its row index in D^k
+            desc_rows = {} # descendant key to its row index in D(b)
             d_rows = []
             d_cols = []
             d_data = []
 
             for a, op_a in enumerate(block_reprs):
-                for op_b, s, coeff in self.compiler.descendants(op_a):
-                    key = self._canon(op_b)
+                for op_mu, s, coeff in self.compiler.descendants(op_a):
+                    key = self._canon(op_mu)
                     if key in self.basis_indices:
                         continue
-                    if not self.compiler.nonzero_fourier(op_b, q):
+                    if not self.compiler.nonzero_fourier(op_mu, q):
                         continue
 
-                    b = desc_rows.get(key)
-                    if b is None:
-                        b = len(desc_keys)
-                        desc_rows[key] = b
+                    mu = desc_rows.get(key)
+                    if mu is None:
+                        mu = len(desc_keys)
+                        desc_rows[key] = mu
                         desc_keys.append(key)
                         if key not in cand_reps:
-                            cand_reps[key] = op_b
+                            cand_reps[key] = op_mu
 
-                    d_rows.append(b)
+                    d_rows.append(mu)
                     d_cols.append(a)
                     d_data.append(coeff * self.compiler.fourier_phase(q, s))
 
@@ -381,23 +278,12 @@ class NGARunner:
                 (d_data, (d_rows, d_cols)),
                 shape=(len(desc_keys), len(block_reprs)),
             ).tocsr() # implicitly sum over s
-            w = D @ null_eigvecs
-            block_scores = np.sum(np.abs(w)**2, axis=1)
+
+            # diag(D(b) Y(b) D^dag(b))
+            block_scores = np.asarray(D.conj().multiply(D @ Y).sum(axis=1)).ravel().real
 
             for key, score in zip(desc_keys, block_scores):
                 cand_scores[key] = cand_scores.get(key, 0) + float(score)
-
-        null_count = len(null_eigvals)
-        if null_count == 0:
-            self.to_grow = []
-            self.record.grow_null_count = 0
-            self.record.max_grow_null_eigval = None
-            return self.to_grow
-
-        self.record.grow_null_count = null_count
-        self.record.max_grow_null_eigval = float(np.max(null_eigvals))
-        for key in cand_scores:
-            cand_scores[key] /= null_count
 
         if self.scheduler.reentry_penalty > 0:
             for key, count in self.drop_counts.items():
@@ -433,7 +319,7 @@ class NGARunner:
         self.build()
         summary = self.compiler.summary()
         self.solve()
-        self.diagonalize()
+        self.load_psd_duals()
         self.propose_pruning()
         self.propose_growth()
         self.update()
@@ -455,8 +341,6 @@ if __name__ == '__main__':
         required_basis_reprs=required_basis_reprs,
         nga_params=NGAParams(
             solver_backend='MOSEK',
-            drop_null_tol=1e-8,
-            grow_null_tol=1e-8,
             max_drop_leverage=5e-2,
         ),
         scheduler=BaseScheduler(
@@ -473,7 +357,7 @@ if __name__ == '__main__':
         print(i, runner.compiler.summary())
 
         runner.solve()
-        runner.diagonalize()
+        runner.load_psd_duals()
         runner.propose_pruning()
         runner.propose_growth()
         runner.update()

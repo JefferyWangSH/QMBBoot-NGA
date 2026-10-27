@@ -30,9 +30,8 @@
   "nga": {
     "solver_backend": "MOSEK",
     "solver_kwargs": {},
-    "drop_null_tol": 1e-8,
-    "grow_null_tol": 1e-8,
-    "max_drop_leverage": 5e-2
+    "max_drop_leverage": 5e-2,
+    "warm_start": false
   },
   "scheduler_type": "rate",
   "scheduler": {
