@@ -1,5 +1,6 @@
-from nga import NGAParams, NGARunner
+from nga import NGARunner
 from nga_scheduler import BaseScheduler
+from sdp import SDPSolverParams
 from compiler.hubbard import HubbardCompiler, HubbardParams, build_basis_reprs
 from operators.majorana import MajoranaMonomial
 
@@ -21,19 +22,19 @@ if __name__ == '__main__':
         compiler=HubbardCompiler(params),
         basis_reprs=basis_reprs,
         required_basis_reprs=required_basis_reprs,
-        nga_params=NGAParams(
-            solver_backend='SCS',
-            solver_kwargs={
+        solver_params=SDPSolverParams(
+            backend='SCS',
+            kwargs={
                 'eps': 1e-5,
                 'max_iters': 5000
             },
-            max_drop_leverage=5e-2,
             warm_start=False,
         ),
         scheduler=BaseScheduler(
             net_growth_min=1,
             net_growth_cap=8,
             drop_cap=8,
+            max_drop_rel_leverage=0.05,
             reentry_penalty=0.5,
         ),
     )

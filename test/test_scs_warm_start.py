@@ -1,7 +1,8 @@
 import time
 
-from nga import NGAParams, NGARunner
+from nga import NGARunner
 from nga_scheduler import BaseScheduler
+from sdp import SDPSolverParams
 from compiler.hubbard import HubbardCompiler, HubbardParams, build_basis_reprs
 from operators.majorana import MajoranaMonomial
 
@@ -23,16 +24,16 @@ if __name__ == '__main__':
             MajoranaMonomial.from_str(params.L, monomial).trans_canon_rep
             for monomial in ['I', '0u+', '0u-', '0u+ 0u-', '0d+', '0d-', '0d+ 0d-']
         ],
-        nga_params=NGAParams(
-            solver_backend='SCS_QMBBOOT',
-            solver_kwargs={'eps': eps},
-            max_drop_leverage=5e-2,
+        solver_params=SDPSolverParams(
+            backend='SCS_QMBBOOT',
+            kwargs={'eps': eps},
             warm_start=False,
         ),
         scheduler=BaseScheduler(
             net_growth_min=1,
             net_growth_cap=8,
             drop_cap=8,
+            max_drop_rel_leverage=0.05,
             reentry_penalty=0.5,
         ),
     )
@@ -40,23 +41,23 @@ if __name__ == '__main__':
     # the trajectory is driven by cold solves; from step 1 on, the same SDPData is also
     # solved warm from export_warm() of the previous step (before the cold solve, so that
     # the NGA proposals use the cold solution and the trajectory does not depend on warm start)
-    warm = None
+    warm_data = None
     totals = {'cold': [0, 0.], 'warm': [0, 0.]}
     for step in range(n_steps):
         runner.build()
 
-        warmed = warm is not None
+        warmed = warm_data is not None
         line_warm = '-'
         if warmed:
             start = time.perf_counter()
-            value_w = runner.solver.solve(warm_start=warm, **runner.nga_params.solver_kwargs)
+            value_w = runner.solver.solve(warm_data=warm_data, **runner.solver_params.kwargs)
             wall_w = time.perf_counter() - start
             iters_w = runner.solver.summary()['num_iters']
             line_warm = f'{iters_w:6d} it {wall_w:7.2f} s {runner.solver.status}'
 
         runner.solve()
         record = runner.record
-        warm = runner.solver.export_warm()
+        warm_data = runner.solver.export_warm()
         if warmed:
             line_warm += f' dE {value_w - record.value:+.1e}'
             for name, iters, wall in [

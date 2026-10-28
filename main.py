@@ -7,15 +7,15 @@ import os
 import sys
 from contextlib import contextmanager
 
-from nga import NGAParams, NGARunner
-from sdp import SDPWarmData
+from nga import NGARunner
+from sdp import SDPSolverParams, SDPWarmData
 
 @dataclass
 class ModelAdapter:
     model_type: str
     model_params: object
     compiler: object
-    nga_params: object
+    solver_params: object
     scheduler: object
     basis: list
     required_basis: list
@@ -58,8 +58,8 @@ class ModelAdapter:
         data = json.loads(Path(config).read_text())
 
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ model
-        model_type = data['model_type']
-        model_config = data['model']
+        model_type = data['model']['type']
+        model_config = data['model']['params']
         basis_config = data['basis']
 
         if model_type == 'hubbard':
@@ -197,12 +197,12 @@ class ModelAdapter:
         else:
             raise ValueError(f'unknown model type: {model_type}')
 
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ NGA params
-        nga_params = NGAParams(**data['nga'])
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ SDP solver params
+        solver_params = SDPSolverParams(**data['solver'])
 
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ NGA scheduler
-        scheduler_type = data['scheduler_type']
-        scheduler_config = data['scheduler']
+        scheduler_type = data['scheduler']['type']
+        scheduler_config = data['scheduler']['params']
 
         if scheduler_type == 'base':
             from nga_scheduler import BaseScheduler
@@ -227,7 +227,7 @@ class ModelAdapter:
             resume_warm = Path(resume) / 'warm.npz'
 
             state = json.loads(resume_state.read_text())
-            if state['model_type'] != model_type or state['model'] != asdict(model_params):
+            if state['model'] != {'type': model_type, 'params': asdict(model_params)}:
                 raise ValueError('resume state model parameters do not match config')
             basis = build_basis(json.loads(resume_basis.read_text()))
             start_step = state.get('step', -1) + 1
@@ -242,7 +242,7 @@ class ModelAdapter:
                     drop_counts[key] = drop_counts.get(key, 0) + 1
 
             # warm start the first resumed step from the last saved solution
-            warm_data = SDPWarmData.load(resume_warm) if nga_params.warm_start and resume_warm.exists() else None
+            warm_data = SDPWarmData.load(resume_warm) if solver_params.warm_start and resume_warm.exists() else None
 
             # apply the last move
             if events.get('steps'):
@@ -271,7 +271,7 @@ class ModelAdapter:
             drop_counts = {}
             warm_data = None
 
-        return cls(model_type, model_params, compiler, nga_params, scheduler, basis, required_basis, start_step, records, events, drop_counts, warm_data)
+        return cls(model_type, model_params, compiler, solver_params, scheduler, basis, required_basis, start_step, records, events, drop_counts, warm_data)
 
     def get_basis_rep(self, key):
         if self.model_type == 'hubbard':
@@ -321,7 +321,7 @@ if __name__ == '__main__':
 
     adapter = ModelAdapter.load(args.config, args.resume)
     if args.verbose:
-        adapter.nga_params.solver_kwargs['verbose'] = True
+        adapter.solver_params.kwargs['verbose'] = True
     output_basis = args.output_dir / 'basis.json'
     output_state = args.output_dir / 'state.json'
     output_events = args.output_dir / 'events.json'
@@ -331,7 +331,7 @@ if __name__ == '__main__':
         compiler=adapter.compiler,
         basis_reprs=adapter.basis,
         required_basis_reprs=adapter.required_basis,
-        nga_params=adapter.nga_params,
+        solver_params=adapter.solver_params,
         scheduler=adapter.scheduler,
         drop_counts=adapter.drop_counts,
         warm_data=adapter.warm_data,
@@ -374,9 +374,8 @@ if __name__ == '__main__':
         output_state.parent.mkdir(parents=True, exist_ok=True)
         state = {
             'step': step,
-            'model_type': adapter.model_type,
-            'model': asdict(adapter.model_params),
-            'nga': asdict(adapter.nga_params),
+            'model': {'type': adapter.model_type, 'params': asdict(adapter.model_params)},
+            'solver': runner.solver_params.to_dict(),
             'scheduler': runner.scheduler.to_dict(),
             'records': records,
         }

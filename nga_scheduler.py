@@ -1,10 +1,19 @@
 import math
 
 class BaseScheduler:
-    def __init__(self, *, net_growth_cap: int, net_growth_min: int, drop_cap: int, reentry_penalty: float):
+    def __init__(
+        self,
+        *,
+        net_growth_cap: int,
+        net_growth_min: int,
+        drop_cap: int,
+        max_drop_rel_leverage: float,
+        reentry_penalty: float,
+    ):
         self.net_growth_cap = net_growth_cap
         self.net_growth_min = net_growth_min
         self.drop_cap = drop_cap
+        self.max_drop_rel_leverage = max_drop_rel_leverage
         self.reentry_penalty = reentry_penalty
         self._check_validness()
 
@@ -12,6 +21,7 @@ class BaseScheduler:
         assert self.net_growth_min >= 0
         assert self.net_growth_cap >= self.net_growth_min
         assert self.drop_cap >= 0
+        assert self.max_drop_rel_leverage >= 0
         assert 0 <= self.reentry_penalty <= 1
 
     def update(self, runner):
@@ -32,11 +42,13 @@ class RateScheduler(BaseScheduler):
         net_growth_min: int,
         drop_cap_base: int,
         drop_cap_rate: float,
+        max_drop_rel_leverage: float,
         reentry_penalty: float,
     ):
         self.net_growth_cap = None
         self.net_growth_min = net_growth_min
         self.drop_cap = None
+        self.max_drop_rel_leverage = max_drop_rel_leverage
         self.reentry_penalty = reentry_penalty
 
         self.net_growth_cap_base = net_growth_cap_base
@@ -67,12 +79,14 @@ class DecayScheduler(BaseScheduler):
         drop_cap_rate: float,
         drop_decay_start: int,
         drop_decay_end: int,
+        max_drop_rel_leverage: float,
         reentry_penalty: float,
     ):
         assert drop_decay_end > drop_decay_start
         self.net_growth_cap = None
         self.net_growth_min = net_growth_min
         self.drop_cap = None
+        self.max_drop_rel_leverage = max_drop_rel_leverage
         self.reentry_penalty = reentry_penalty
 
         self.net_growth_cap_base = net_growth_cap_base

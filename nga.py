@@ -1,18 +1,10 @@
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import dataclass, field, fields
 import time
 
 import numpy as np
 import scipy as sp
 
-@dataclass(slots=True)
-class NGAParams:
-    solver_backend: str = 'MOSEK'
-    solver_kwargs: dict = field(default_factory=dict)
-    max_drop_leverage: float = 1e-2
-    warm_start: bool = False
-
-    def to_dict(self):
-        return asdict(self)
+from sdp import SDPSolverParams, make_sdp_solver
 
 @dataclass(slots=True)
 class NGARecord:
@@ -35,7 +27,7 @@ class NGARecord:
         'build_time': None,
         'solve_time': None,
     })
-    nga_params: dict | None = None
+    solver: dict | None = None
     scheduler: dict | None = None
 
     @classmethod
@@ -80,7 +72,7 @@ class NGARunner:
         basis_reprs,
         required_basis_reprs,
         scheduler,
-        nga_params: NGAParams,
+        solver_params: SDPSolverParams,
         drop_counts: dict | None = None,
         warm_data: 'SDPWarmData | None' = None,
     ):
@@ -104,16 +96,8 @@ class NGARunner:
             raise ValueError('required basis representatives must be included in basis_reprs')
 
         self.scheduler = scheduler
-        self.nga_params = nga_params
-
-        if nga_params.warm_start and nga_params.solver_backend != 'SCS_QMBBOOT':
-            raise ValueError(f'warm_start is not supported by solver backend {nga_params.solver_backend}')
-        if nga_params.solver_backend == 'SCS_QMBBOOT':
-            from sdp import ScsSDPSolver
-            self.solver = ScsSDPSolver()
-        else:
-            from sdp import SDPSolver
-            self.solver = SDPSolver()
+        self.solver_params = solver_params
+        self.solver = make_sdp_solver(solver_params)
         self.warm_data = warm_data # export_warm() of the previous solution
         self._reset_record()
         self.history = []
@@ -129,7 +113,7 @@ class NGARunner:
     def _reset_record(self):
         self.record = NGARecord(
             basis_reps = len(self.basis_reprs),
-            nga_params = self.nga_params.to_dict(),
+            solver = self.solver_params.to_dict(),
             required_basis = [str(rep) for rep in self.required_basis_reprs],
         )
 
@@ -160,9 +144,9 @@ class NGARunner:
     def solve(self):
         start = time.perf_counter()
         self.solver.solve(
-            backend=self.nga_params.solver_backend,
-            warm_start=self.warm_data,
-            **self.nga_params.solver_kwargs,
+            backend=self.solver_params.backend,
+            warm_data=self.warm_data,
+            **self.solver_params.kwargs,
         )
         self.record.time['solve_time'] = time.perf_counter() - start
 
@@ -175,7 +159,7 @@ class NGARunner:
         self.record.warm_start = self.warm_data is not None
 
         # keep the last solution as the warm data of the next step
-        if self.nga_params.warm_start and self.solver.status in ('optimal', 'optimal_inaccurate'):
+        if self.solver_params.warm_start and self.solver.status in ('optimal', 'optimal_inaccurate'):
             self.warm_data = self.solver.export_warm()
 
     def load_psd_duals(self):
@@ -210,7 +194,7 @@ class NGARunner:
             (score, self._canon(rep))
             for rep, score in zip(self.basis_reprs, leverage)
             if self._canon(rep) not in self.required_basis_keys
-            and score < self.nga_params.max_drop_leverage
+            and len(self.basis_reprs) * score < self.scheduler.max_drop_rel_leverage  # l_a < c / |B|
         ]
         # sort by increasing leverage
         cands.sort()
@@ -339,14 +323,14 @@ if __name__ == '__main__':
         compiler=IsingCompiler(params),
         basis_reprs=basis_reprs,
         required_basis_reprs=required_basis_reprs,
-        nga_params=NGAParams(
-            solver_backend='MOSEK',
-            max_drop_leverage=5e-2,
+        solver_params=SDPSolverParams(
+            backend='MOSEK',
         ),
         scheduler=BaseScheduler(
             net_growth_min=1,
             net_growth_cap=4,
             drop_cap=4,
+            max_drop_rel_leverage=.05,
             reentry_penalty=.5,
         ),
     )

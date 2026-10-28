@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 import json
 
 import numpy as np
@@ -305,6 +305,24 @@ class SDPWarmData:
         return tuple(map(SDPWarmData._tuples, value)) if isinstance(value, list) else value
 
 
+@dataclass(slots=True)
+class SDPSolverParams:
+    backend: str = 'SCS_QMBBOOT'
+    kwargs: dict = field(default_factory=dict)
+    warm_start: bool = False
+
+    def to_dict(self):
+        return asdict(self)
+
+
+def make_sdp_solver(solver_params: SDPSolverParams) -> 'SDPSolver | ScsSDPSolver':
+    if solver_params.warm_start and solver_params.backend != ScsSDPSolver.name:
+        raise ValueError(f'warm_start is not supported by solver backend {solver_params.backend}')
+    if solver_params.backend == ScsSDPSolver.name:
+        return ScsSDPSolver()
+    return SDPSolver()
+
+
 class SDPSolver:
     SOLVED = ('optimal', 'optimal_inaccurate')
 
@@ -431,15 +449,15 @@ class SDPSolver:
         )
         return self.problem
 
-    def solve(self, backend: str = 'SCS', warm_start: SDPWarmData | None = None, **kwargs):
+    def solve(self, backend: str = 'SCS', warm_data: SDPWarmData | None = None, **kwargs):
         '''
-            warm_start is currently not supported through cvxpy,
+            warm_data is currently not supported through cvxpy,
             accepted for interface compatibility with ScsSDPSolver.solve.
         '''
         if self.problem is None:
             raise ValueError('problem has not been built')
-        if warm_start:
-            raise NotImplementedError('SDPSolver does not support warm_start; use ScsSDPSolver')
+        if warm_data is not None:
+            raise NotImplementedError('SDPSolver does not support warm_data; use ScsSDPSolver')
         value = self.problem.solve(solver=backend, **kwargs)
         self.status = self.problem.status
         return value
@@ -544,12 +562,12 @@ class ScsSDPSolver:
         self.scs_output = self.status = None
         return self.problem
 
-    def solve(self, backend: str | None = None, warm_start: SDPWarmData | None = None, **kwargs):
+    def solve(self, backend: str | None = None, warm_data: SDPWarmData | None = None, **kwargs):
         '''
             `backend` is ignored (interface compatibility). kwargs are SCS settings, translated
             as cvxpy does: eps -> eps_abs = eps_rel = eps; default eps_abs = eps_rel = 1e-5.
 
-            warm_start: export_warm() of a previous solution (possibly of another SDPData),
+            warm_data: export_warm() of a previous solution (possibly of another SDPData),
             mapped onto the built problem by the keys (see _import_warm);
             None for a cold start. SCS's scale is not carried over.
         '''
@@ -559,8 +577,8 @@ class ScsSDPSolver:
             raise ImportError('ScsSDPSolver needs scs-qmbboot, see requirements.txt') from e
         if self.problem is None:
             raise ValueError('problem has not been built')
-        if warm_start is not None and not isinstance(warm_start, SDPWarmData):
-            raise TypeError(f'warm_start must be the SDPWarmData from export_warm(), got {type(warm_start).__name__}')
+        if warm_data is not None and not isinstance(warm_data, SDPWarmData):
+            raise TypeError(f'warm_data must be the SDPWarmData from export_warm(), got {type(warm_data).__name__}')
         opts = dict(kwargs)
         if 'eps' in opts:
             opts['eps_abs'] = opts['eps_rel'] = opts.pop('eps')
@@ -571,10 +589,10 @@ class ScsSDPSolver:
 
         scs_data, cone, layout = self.problem
         solver = scs.SCS(scs_data, cone, **opts)
-        if warm_start is None:
+        if warm_data is None:
             self.scs_output = solver.solve(warm_start=False)
         else:
-            x, y, s = self._import_warm(warm_start)
+            x, y, s = self._import_warm(warm_data)
             self.scs_output = solver.solve(warm_start=True, x=x, y=y, s=s)
         info = self.scs_output['info']
         self.status = self.STATUS.get(info['status_val'], 'solver_error')
