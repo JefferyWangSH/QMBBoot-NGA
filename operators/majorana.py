@@ -232,11 +232,29 @@ class MajoranaMonomial:
         monomial = MajoranaMonomial(L=self.L, mask=mask)
         return monomial, (-1 if swaps & 1 else 1)
 
+    def _occupied_sites(self) -> list[int]:
+        # distinct occupied sites in increasing order
+        sites = []
+        support = self.mask
+        while support:
+            site = ((support & -support).bit_length() - 1) // 4
+            sites.append(site)
+            support &= ~(0xf << (4*site))
+        return sites
+
     @cached_property
     def _trans_canon_data(self) -> tuple[int, int]:
+        # the minimal translate has an occupied site 0
+        # (otherwise shifting it down by one site lowers every mode),
+        # so only try the shifts that move an occupied site to site 0.
+        # If several shifts give the same mask, the one with the smallest shift is chosen as the canon
+        # (together with its sign), which is why the sites are visited in decreasing order.
         canon = self.mask
         canon_sign = 1
-        for shift in range(1, self.L):
+        for site in reversed(self._occupied_sites()):
+            shift = (self.L - site) % self.L
+            if shift == 0:
+                continue
             cand, cand_sign = self._rotate_l(self.mask, shift)
             if cand < canon:
                 canon = cand
@@ -257,7 +275,12 @@ class MajoranaMonomial:
 
     @cached_property
     def _period_data(self) -> tuple[int, int]:
-        for shift in range(1, self.L):
+        # a period maps the lowest occupied site to another occupied site
+        sites = self._occupied_sites()
+        if not sites:
+            return 1, 1
+        for site in sites[1:]:
+            shift = site - sites[0]
             mask, sign = self._rotate_l(self.mask, shift)
             if mask == self.mask:
                 return shift, sign

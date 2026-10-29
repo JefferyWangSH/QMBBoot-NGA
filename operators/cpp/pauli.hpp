@@ -152,8 +152,16 @@ class PauliString {
         }
 
         PauliString trans_canon() const {
+            // the minimal translate has a non-identity site 0
+            // (otherwise shifting it down by one site lowers every bit),
+            // so only try the shifts that move a non-identity site to site 0.
             auto canon = *this;
-            for (std::size_t shift = 1; shift < L; ++shift) {
+            const auto [sites, n_sites] = occupied_sites();
+            for (std::size_t idx = n_sites; idx > 0; --idx) {
+                const auto shift = (L - sites[idx - 1]) % L;
+                if (shift == 0) {
+                    continue;
+                }
                 auto cand = translate(static_cast<int>(shift));
                 if (cand < canon) {
                     canon = std::move(cand);
@@ -163,7 +171,13 @@ class PauliString {
         }
 
         std::size_t period() const {
-            for (std::size_t shift = 1; shift < L; ++shift) {
+            // a period maps the lowest non-identity site to another non-identity site
+            const auto [sites, n_sites] = occupied_sites();
+            if (n_sites == 0) {
+                return 1;
+            }
+            for (std::size_t idx = 1; idx < n_sites; ++idx) {
+                const auto shift = sites[idx] - sites[0];
                 if (translate(static_cast<int>(shift)) == *this) {
                     return shift;
                 }
@@ -252,6 +266,21 @@ class PauliString {
             if (site >= L) {
                 throw std::out_of_range("Pauli site index out of range");
             }
+        }
+
+        // distinct non-identity sites in increasing order and their number
+        std::pair<std::array<std::size_t, L>, std::size_t> occupied_sites() const {
+            std::array<std::size_t, L> sites;
+            std::size_t n_sites = 0;
+            for (std::size_t word_idx = 0; word_idx < n_words; ++word_idx) {
+                auto word = m_words[word_idx];
+                while (word != 0) {
+                    const auto site = (64 * word_idx + std::countr_zero(word)) / 2;
+                    sites[n_sites++] = site;
+                    word &= ~(std::uint64_t{3} << (2 * (site % 32)));
+                }
+            }
+            return {sites, n_sites};
         }
 
         int code(std::size_t site) const {

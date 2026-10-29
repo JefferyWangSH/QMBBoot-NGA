@@ -292,10 +292,32 @@ class MajoranaMonomialSquare {
         }
 
         std::pair<MajoranaMonomialSquare, int> trans_canon() const {
+            // the minimal translate has an occupied row 0 and an occupied column 0
+            // (otherwise shifting it down by one row or one column lowers every mode),
+            // so only try the shifts that move an occupied row to row 0 and an occupied column to column 0.
+            // The shifts are sorted so that, if several shifts give the same mask,
+            // the smallest (shift_y, shift_x) is chosen as the canon (together with its sign).
             auto canon = *this;
             int canon_sign = 1;
-            for (std::size_t shift_y = 0; shift_y < Ly; ++shift_y) {
-                for (std::size_t shift_x = 0; shift_x < Lx; ++shift_x) {
+
+            const auto [cols, n_cols] = occupied_cols();
+            std::array<std::size_t, Lx> shifts_x;
+            for (std::size_t col_idx = 0; col_idx < n_cols; ++col_idx) {
+                shifts_x[col_idx] = (Lx - cols[col_idx]) % Lx;
+            }
+            std::sort(shifts_x.begin(), shifts_x.begin() + n_cols);
+
+            const auto [rows, n_rows] = occupied_rows();
+            std::array<std::size_t, Ly> shifts_y;
+            for (std::size_t row_idx = 0; row_idx < n_rows; ++row_idx) {
+                shifts_y[row_idx] = (Ly - rows[row_idx]) % Ly;
+            }
+            std::sort(shifts_y.begin(), shifts_y.begin() + n_rows);
+
+            for (std::size_t row_idx = 0; row_idx < n_rows; ++row_idx) {
+                const auto shift_y = shifts_y[row_idx];
+                for (std::size_t col_idx = 0; col_idx < n_cols; ++col_idx) {
+                    const auto shift_x = shifts_x[col_idx];
                     if (shift_x == 0 && shift_y == 0) {
                         continue;
                     }
@@ -310,9 +332,25 @@ class MajoranaMonomialSquare {
         }
 
         std::vector<std::pair<std::array<std::size_t, 2>, int>> trans_stabilizer() const {
+            // a stabilizer maps the lowest occupied row and column to occupied ones
             std::vector<std::pair<std::array<std::size_t, 2>, int>> stabilizer;
-            for (std::size_t shift_y = 0; shift_y < Ly; ++shift_y) {
-                for (std::size_t shift_x = 0; shift_x < Lx; ++shift_x) {
+            const auto [cols, n_cols] = occupied_cols();
+            const auto [rows, n_rows] = occupied_rows();
+            if (n_rows == 0) {
+                // the identity is stabilized by all translations
+                for (std::size_t shift_y = 0; shift_y < Ly; ++shift_y) {
+                    for (std::size_t shift_x = 0; shift_x < Lx; ++shift_x) {
+                        if (shift_x != 0 || shift_y != 0) {
+                            stabilizer.push_back({{shift_x, shift_y}, 1});
+                        }
+                    }
+                }
+                return stabilizer;
+            }
+            for (std::size_t row_idx = 0; row_idx < n_rows; ++row_idx) {
+                const auto shift_y = rows[row_idx] - rows[0];
+                for (std::size_t col_idx = 0; col_idx < n_cols; ++col_idx) {
+                    const auto shift_x = cols[col_idx] - cols[0];
                     // nontrivial translation stabilizers only; identity/full-period shifts are omitted.
                     if (shift_x == 0 && shift_y == 0) {
                         continue;
@@ -442,6 +480,44 @@ class MajoranaMonomialSquare {
         void set_bit(std::size_t mode) {
             check_mode(mode);
             m_words[mode / 64] |= std::uint64_t{1} << (mode % 64);
+        }
+
+        // distinct occupied columns (x) in increasing order and their number
+        std::pair<std::array<std::size_t, Lx>, std::size_t> occupied_cols() const {
+            std::array<bool, Lx> occupied{};
+            for (std::size_t word_idx = 0; word_idx < n_words; ++word_idx) {
+                auto word = m_words[word_idx];
+                while (word != 0) {
+                    const auto site = (64 * word_idx + std::countr_zero(word)) / 4;
+                    occupied[site % Lx] = true;
+                    word &= ~(std::uint64_t{0xf} << (4 * (site % 16)));
+                }
+            }
+            std::array<std::size_t, Lx> cols;
+            std::size_t n_cols = 0;
+            for (std::size_t x = 0; x < Lx; ++x) {
+                if (occupied[x]) {
+                    cols[n_cols++] = x;
+                }
+            }
+            return {cols, n_cols};
+        }
+
+        // distinct occupied rows (y) in increasing order and their number
+        std::pair<std::array<std::size_t, Ly>, std::size_t> occupied_rows() const {
+            std::array<std::size_t, Ly> rows;
+            std::size_t n_rows = 0;
+            for (std::size_t word_idx = 0; word_idx < n_words; ++word_idx) {
+                auto word = m_words[word_idx];
+                while (word != 0) {
+                    const auto site = (64 * word_idx + std::countr_zero(word)) / 4;
+                    if (n_rows == 0 || rows[n_rows - 1] != site / Lx) {
+                        rows[n_rows++] = site / Lx;
+                    }
+                    word &= ~(std::uint64_t{0xf} << (4 * (site % 16)));
+                }
+            }
+            return {rows, n_rows};
         }
 
         // fn must map occupied modes injectively into valid modes; this helper is for symmetry permutations.

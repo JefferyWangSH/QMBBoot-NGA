@@ -54,10 +54,26 @@ class PauliString:
         rot = 2*shift
         return ((mask << rot) | (mask >> (2*self.L - rot))) & full
 
+    def _occupied_sites(self) -> list[int]:
+        # distinct non-identity sites in increasing order
+        sites = []
+        support = self.mask
+        while support:
+            site = ((support & -support).bit_length() - 1) // 2
+            sites.append(site)
+            support &= ~(3 << (2*site))
+        return sites
+
     @cached_property
     def trans_canon(self) -> int:
+        # the minimal translate has a non-identity site 0
+        # (otherwise shifting it down by one site lowers every bit),
+        # so only try the shifts that move a non-identity site to site 0.
         canon = self.mask
-        for shift in range(1, self.L):
+        for site in reversed(self._occupied_sites()):
+            shift = (self.L - site) % self.L
+            if shift == 0:
+                continue
             cand = self._rotate_l(self.mask, shift)
             if cand < canon:
                 canon = cand
@@ -69,7 +85,12 @@ class PauliString:
 
     @cached_property
     def period(self) -> int:
-        for shift in range(1, self.L):
+        # a period maps the lowest non-identity site to another non-identity site
+        sites = self._occupied_sites()
+        if not sites:
+            return 1
+        for site in sites[1:]:
+            shift = site - sites[0]
             if self._rotate_l(self.mask, shift) == self.mask:
                 return shift
         return self.L

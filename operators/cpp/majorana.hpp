@@ -277,9 +277,19 @@ class MajoranaMonomial {
         }
 
         std::pair<MajoranaMonomial, int> trans_canon() const {
+            // the minimal translate has an occupied site 0
+            // (otherwise shifting it down by one site lowers every mode),
+            // so only try the shifts that move an occupied site to site 0.
+            // If several shifts give the same mask, the one with the smallest shift is chosen as the canon
+            // (together with its sign), which is why the sites are visited in decreasing order.
             auto canon = *this;
             int canon_sign = 1;
-            for (std::size_t shift = 1; shift < L; ++shift) {
+            const auto [sites, n_sites] = occupied_sites();
+            for (std::size_t idx = n_sites; idx > 0; --idx) {
+                const auto shift = (L - sites[idx - 1]) % L;
+                if (shift == 0) {
+                    continue;
+                }
                 auto [cand, cand_sign] = translate(static_cast<int>(shift));
                 if (cand < canon) {
                     canon = std::move(cand);
@@ -290,7 +300,13 @@ class MajoranaMonomial {
         }
 
         std::pair<std::size_t, int> period() const {
-            for (std::size_t shift = 1; shift < L; ++shift) {
+            // a period maps the lowest occupied site to another occupied site
+            const auto [sites, n_sites] = occupied_sites();
+            if (n_sites == 0) {
+                return {1, 1};
+            }
+            for (std::size_t idx = 1; idx < n_sites; ++idx) {
+                const auto shift = sites[idx] - sites[0];
                 auto [cand, cand_sign] = translate(static_cast<int>(shift));
                 if (cand == *this) {
                     return {shift, cand_sign};
@@ -369,6 +385,21 @@ class MajoranaMonomial {
         void set_bit(std::size_t mode) {
             check_mode(mode);
             m_words[mode / 64] |= std::uint64_t{1} << (mode % 64);
+        }
+
+        // distinct occupied sites in increasing order and their number
+        std::pair<std::array<std::size_t, L>, std::size_t> occupied_sites() const {
+            std::array<std::size_t, L> sites;
+            std::size_t n_sites = 0;
+            for (std::size_t word_idx = 0; word_idx < n_words; ++word_idx) {
+                auto word = m_words[word_idx];
+                while (word != 0) {
+                    const auto site = (64 * word_idx + std::countr_zero(word)) / 4;
+                    sites[n_sites++] = site;
+                    word &= ~(std::uint64_t{0xf} << (4 * (site % 16)));
+                }
+            }
+            return {sites, n_sites};
         }
 
         // fn must map occupied modes injectively into valid modes; this helper is for symmetry permutations.
