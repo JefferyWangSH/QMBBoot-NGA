@@ -449,39 +449,7 @@ class MajoranaMonomialSquare {
             });
         }
 
-    private:
-        static std::size_t mod_shift(int shift, std::size_t period) {
-            if (shift >= 0) {
-                return static_cast<std::size_t>(shift) % period;
-            }
-            const auto abs_shift = static_cast<std::size_t>(-(shift + 1)) + 1;
-            return (period - abs_shift % period) % period;
-        }
-
-        void check_last_word() const {
-            const auto rem = n_modes % 64;
-            const auto last_mask = rem == 0 ? ~std::uint64_t{0} : ((std::uint64_t{1} << rem) - 1);
-            if ((m_words.back() & ~last_mask) != 0) {
-                throw std::invalid_argument("word vector exceeds 4*Lx*Ly Majorana modes");
-            }
-        }
-
-        void check_mode(std::size_t mode) const {
-            if (mode >= n_modes) {
-                throw std::out_of_range("Majorana mode index out of range");
-            }
-        }
-
-        bool get_bit(std::size_t mode) const {
-            check_mode(mode);
-            return (m_words[mode / 64] >> (mode % 64)) & 1;
-        }
-
-        void set_bit(std::size_t mode) {
-            check_mode(mode);
-            m_words[mode / 64] |= std::uint64_t{1} << (mode % 64);
-        }
-
+        // @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ public helpers
         // distinct occupied columns (x) in increasing order and their number
         std::pair<std::array<std::size_t, Lx>, std::size_t> occupied_cols() const {
             std::array<bool, Lx> occupied{};
@@ -518,6 +486,54 @@ class MajoranaMonomialSquare {
                 }
             }
             return {rows, n_rows};
+        }
+
+        // distinct occupied sites in increasing order and their number
+        std::pair<std::array<std::size_t, n_sites>, std::size_t> occupied_sites() const {
+            std::array<std::size_t, n_sites> sites{};
+            std::size_t n_occupied = 0;
+            for (std::size_t word_idx = 0; word_idx < n_words; ++word_idx) {
+                auto word = m_words[word_idx];
+                while (word != 0) {
+                    const auto site = (64 * word_idx + std::countr_zero(word)) / 4;
+                    sites[n_occupied++] = site;
+                    word &= ~(std::uint64_t{0xf} << (4 * (site % 16)));
+                }
+            }
+            return {sites, n_occupied};
+        }
+
+    private:
+        static std::size_t mod_shift(int shift, std::size_t period) {
+            if (shift >= 0) {
+                return static_cast<std::size_t>(shift) % period;
+            }
+            const auto abs_shift = static_cast<std::size_t>(-(shift + 1)) + 1;
+            return (period - abs_shift % period) % period;
+        }
+
+        void check_last_word() const {
+            const auto rem = n_modes % 64;
+            const auto last_mask = rem == 0 ? ~std::uint64_t{0} : ((std::uint64_t{1} << rem) - 1);
+            if ((m_words.back() & ~last_mask) != 0) {
+                throw std::invalid_argument("word vector exceeds 4*Lx*Ly Majorana modes");
+            }
+        }
+
+        void check_mode(std::size_t mode) const {
+            if (mode >= n_modes) {
+                throw std::out_of_range("Majorana mode index out of range");
+            }
+        }
+
+        bool get_bit(std::size_t mode) const {
+            check_mode(mode);
+            return (m_words[mode / 64] >> (mode % 64)) & 1;
+        }
+
+        void set_bit(std::size_t mode) {
+            check_mode(mode);
+            m_words[mode / 64] |= std::uint64_t{1} << (mode % 64);
         }
 
         // fn must map occupied modes injectively into valid modes; this helper is for symmetry permutations.

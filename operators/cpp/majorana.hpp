@@ -362,6 +362,22 @@ class MajoranaMonomial {
             });
         }
 
+        // @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ public helpers
+        // distinct occupied sites in increasing order and their number
+        std::pair<std::array<std::size_t, L>, std::size_t> occupied_sites() const {
+            std::array<std::size_t, L> sites{};
+            std::size_t n_sites = 0;
+            for (std::size_t word_idx = 0; word_idx < n_words; ++word_idx) {
+                auto word = m_words[word_idx];
+                while (word != 0) {
+                    const auto site = (64 * word_idx + std::countr_zero(word)) / 4;
+                    sites[n_sites++] = site;
+                    word &= ~(std::uint64_t{0xf} << (4 * (site % 16)));
+                }
+            }
+            return {sites, n_sites};
+        }
+
     private:
         void check_last_word() const {
             const auto rem = n_modes % 64;
@@ -385,21 +401,6 @@ class MajoranaMonomial {
         void set_bit(std::size_t mode) {
             check_mode(mode);
             m_words[mode / 64] |= std::uint64_t{1} << (mode % 64);
-        }
-
-        // distinct occupied sites in increasing order and their number
-        std::pair<std::array<std::size_t, L>, std::size_t> occupied_sites() const {
-            std::array<std::size_t, L> sites;
-            std::size_t n_sites = 0;
-            for (std::size_t word_idx = 0; word_idx < n_words; ++word_idx) {
-                auto word = m_words[word_idx];
-                while (word != 0) {
-                    const auto site = (64 * word_idx + std::countr_zero(word)) / 4;
-                    sites[n_sites++] = site;
-                    word &= ~(std::uint64_t{0xf} << (4 * (site % 16)));
-                }
-            }
-            return {sites, n_sites};
         }
 
         // fn must map occupied modes injectively into valid modes; this helper is for symmetry permutations.

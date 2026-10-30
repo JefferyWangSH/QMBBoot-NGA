@@ -237,6 +237,22 @@ class PauliString {
             return *this;
         }
 
+        // @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ public helpers
+        // distinct non-identity sites in increasing order and their number
+        std::pair<std::array<std::size_t, L>, std::size_t> occupied_sites() const {
+            std::array<std::size_t, L> sites;
+            std::size_t n_sites = 0;
+            for (std::size_t word_idx = 0; word_idx < n_words; ++word_idx) {
+                auto word = m_words[word_idx];
+                while (word != 0) {
+                    const auto site = (64 * word_idx + std::countr_zero(word)) / 2;
+                    sites[n_sites++] = site;
+                    word &= ~(std::uint64_t{3} << (2 * (site % 32)));
+                }
+            }
+            return {sites, n_sites};
+        }
+
     private:
         static int pauli_code(char pauli) {
             if (pauli == 'I') {
@@ -266,21 +282,6 @@ class PauliString {
             if (site >= L) {
                 throw std::out_of_range("Pauli site index out of range");
             }
-        }
-
-        // distinct non-identity sites in increasing order and their number
-        std::pair<std::array<std::size_t, L>, std::size_t> occupied_sites() const {
-            std::array<std::size_t, L> sites;
-            std::size_t n_sites = 0;
-            for (std::size_t word_idx = 0; word_idx < n_words; ++word_idx) {
-                auto word = m_words[word_idx];
-                while (word != 0) {
-                    const auto site = (64 * word_idx + std::countr_zero(word)) / 2;
-                    sites[n_sites++] = site;
-                    word &= ~(std::uint64_t{3} << (2 * (site % 32)));
-                }
-            }
-            return {sites, n_sites};
         }
 
         int code(std::size_t site) const {
