@@ -1,6 +1,6 @@
 from operators.majorana import MajoranaMonomial as PyMajoranaMonomial
 from operators.majorana import MajoranaOperator
-from operators.majorana_jit import MajoranaMonomial as CppMajoranaMonomial
+from operators.jit import MajoranaMonomial as CppMajoranaMonomial
 
 MONOMIAL_CASES = {
     1: [

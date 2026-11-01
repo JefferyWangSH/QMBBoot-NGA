@@ -5,7 +5,7 @@ from pathlib import Path
 
 import cppimport
 
-from operators.majorana_jit import MajoranaMonomial
+from operators.jit import MajoranaMonomial
 
 __all__ = ['sym_canon']
 

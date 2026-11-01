@@ -386,7 +386,7 @@ import os
 
 if os.environ.get('USE_JIT', '1') != '0':
     try:
-        from .majorana_jit import MajoranaMonomial
+        from .jit import MajoranaMonomial
     except ImportError as exc:
         import warnings
         warnings.warn(

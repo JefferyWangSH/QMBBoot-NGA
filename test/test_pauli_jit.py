@@ -1,6 +1,6 @@
 from operators.pauli import PauliString as PyPauliString
 from operators.pauli import PauliOperator
-from operators.pauli_jit import PauliString as CppPauliString
+from operators.jit import PauliString as CppPauliString
 
 STRING_CASES = [
     'I',

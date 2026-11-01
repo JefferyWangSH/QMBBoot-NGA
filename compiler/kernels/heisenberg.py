@@ -5,7 +5,7 @@ from pathlib import Path
 
 import cppimport
 
-from operators.pauli_jit import PauliString
+from operators.jit import PauliString
 
 __all__ = ['sym_canon']
 

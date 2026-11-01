@@ -1,4 +1,4 @@
-from .majorana_square_jit import MajoranaMonomialSquare
+from .jit import MajoranaMonomialSquare
 
 class MajoranaSquareOperator:
     shape: tuple[int, int] | None

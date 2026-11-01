@@ -196,7 +196,7 @@ import os
 
 if os.environ.get('USE_JIT', '1') != '0':
     try:
-        from .pauli_jit import PauliString
+        from .jit import PauliString
     except ImportError as exc:
         import warnings
         warnings.warn(
