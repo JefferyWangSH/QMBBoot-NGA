@@ -20,7 +20,8 @@ def _source_hash() -> str:
         _TEMPLATE_PATH,
         _REPO_ROOT / 'compiler' / 'cpp' / 'kernels' / 'heisenberg.hpp',
         _REPO_ROOT / 'operators' / 'cpp' / 'pauli.hpp',
-        _REPO_ROOT / 'operators' / 'cpp' / 'py_mask.hpp',
+        _REPO_ROOT / 'operators' / 'cpp' / 'words.hpp',
+        _REPO_ROOT / 'operators' / 'cpp' / 'py_words.hpp',
     ):
         h.update(path.read_bytes())
     return h.hexdigest()[:12]

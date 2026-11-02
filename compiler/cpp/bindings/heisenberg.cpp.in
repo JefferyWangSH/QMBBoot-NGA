@@ -8,13 +8,13 @@ cfg['include_dirs'].append('@REPO_ROOT@')
 */
 
 #include "compiler/cpp/kernels/heisenberg.hpp"
-#include "operators/cpp/py_mask.hpp"
+#include "operators/cpp/py_words.hpp"
 
 #include <pybind11/pybind11.h>
 
 namespace py = pybind11;
 using PauliString = qmbboot::operators::PauliString<@L@>;
-using qmbboot::operators::py_mask::words_to_mask;
+using qmbboot::operators::py_words::words_to_mask;
 
 namespace {
 

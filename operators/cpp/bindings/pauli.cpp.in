@@ -8,7 +8,7 @@ cfg['include_dirs'].append('@REPO_ROOT@')
 */
 
 #include "operators/cpp/pauli.hpp"
-#include "operators/cpp/py_mask.hpp"
+#include "operators/cpp/py_words.hpp"
 
 #include <pybind11/complex.h>
 #include <pybind11/pybind11.h>
@@ -25,8 +25,8 @@ using PauliString = qmbboot::operators::PauliString<@L@>;
 using qmbboot::operators::_PAULI_X;
 using qmbboot::operators::_PAULI_Y;
 using qmbboot::operators::_PAULI_Z;
-using qmbboot::operators::py_mask::mask_to_words;
-using qmbboot::operators::py_mask::words_to_mask;
+using qmbboot::operators::py_words::mask_to_words;
+using qmbboot::operators::py_words::words_to_mask;
 
 namespace {
 

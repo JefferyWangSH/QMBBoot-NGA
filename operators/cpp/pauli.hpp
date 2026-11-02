@@ -1,5 +1,7 @@
 #pragma once
 
+#include "operators/cpp/words.hpp"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -28,13 +30,13 @@ class PauliString {
         static constexpr std::size_t n_words = (n_bits + 63) / 64;
 
     private:
-        std::array<std::uint64_t, n_words> m_words{};
+        Words<n_words> m_words;
 
     public:
         // @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construction
         PauliString() = default;
 
-        explicit PauliString(const std::array<std::uint64_t, n_words>& words) : m_words(words) {
+        explicit PauliString(const Words<n_words>& words) : m_words(words) {
             check_last_word();
         }
 
@@ -52,7 +54,7 @@ class PauliString {
             check_last_word();
         }
 
-        const std::array<std::uint64_t, n_words>& words() const {
+        const Words<n_words>& words() const {
             return m_words;
         }
 
@@ -66,15 +68,7 @@ class PauliString {
         }
 
         bool operator<(const PauliString& other) const {
-            for (std::size_t idx = n_words; idx > 0; --idx) {
-                if (m_words[idx - 1] < other.m_words[idx - 1]) {
-                    return true;
-                }
-                if (m_words[idx - 1] > other.m_words[idx - 1]) {
-                    return false;
-                }
-            }
-            return false;
+            return m_words < other.m_words;
         }
 
         // @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ parsing and formatting
@@ -224,9 +218,7 @@ class PauliString {
 
             PauliString result;
             int power = 0;
-            for (std::size_t idx = 0; idx < n_words; ++idx) {
-                result.m_words[idx] = m_words[idx] ^ other.m_words[idx];
-            }
+            result.m_words = m_words ^ other.m_words;
             for (std::size_t site = 0; site < L; ++site) {
                 power += phase_power[code(site)][other.code(site)];
             }

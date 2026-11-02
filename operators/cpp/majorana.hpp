@@ -1,5 +1,7 @@
 #pragma once
 
+#include "operators/cpp/words.hpp"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -25,13 +27,13 @@ class MajoranaMonomial {
         static constexpr std::size_t n_words = (n_modes + 63) / 64;
 
     private:
-        std::array<std::uint64_t, n_words> m_words{};
+        Words<n_words> m_words;
 
     public:
         // @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ construction
         MajoranaMonomial() = default;
 
-        explicit MajoranaMonomial(const std::array<std::uint64_t, n_words>& words) : m_words(words) {
+        explicit MajoranaMonomial(const Words<n_words>& words) : m_words(words) {
             check_last_word();
         }
 
@@ -49,7 +51,7 @@ class MajoranaMonomial {
             check_last_word();
         }
 
-        const std::array<std::uint64_t, n_words>& words() const {
+        const Words<n_words>& words() const {
             return m_words;
         }
 
@@ -63,15 +65,7 @@ class MajoranaMonomial {
         }
 
         bool operator<(const MajoranaMonomial& other) const {
-            for (std::size_t idx = n_words; idx > 0; --idx) {
-                if (m_words[idx - 1] < other.m_words[idx - 1]) {
-                    return true;
-                }
-                if (m_words[idx - 1] > other.m_words[idx - 1]) {
-                    return false;
-                }
-            }
-            return false;
+            return m_words < other.m_words;
         }
 
         // @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ parsing and formatting
@@ -116,20 +110,10 @@ class MajoranaMonomial {
                 const std::size_t spin = spin_ch == 'u' ? 0 : 1;
                 const std::size_t pm = pm_ch == '+' ? 0 : 1;
                 const auto mode = 4 * site + 2 * spin + pm;
-                const auto word_idx = mode / 64;
-                const auto bit = mode % 64;
-
-                int count = 0;
-                if (bit < 63) {
-                    count += std::popcount(monomial.m_words[word_idx] >> (bit + 1));
-                }
-                for (std::size_t idx = word_idx + 1; idx < n_words; ++idx) {
-                    count += std::popcount(monomial.m_words[idx]);
-                }
-                if (count & 1) {
+                if (monomial.m_words.popcount_above(mode) & 1) {
                     total_sign = -total_sign;
                 }
-                monomial.m_words[word_idx] ^= std::uint64_t{1} << bit;
+                monomial.m_words.flip_bit(mode);
 
                 if (!(input >> token)) {
                     break;
@@ -161,11 +145,7 @@ class MajoranaMonomial {
 
         // @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ physical properties
         int degree() const {
-            int total = 0;
-            for (const auto word : m_words) {
-                total += std::popcount(word);
-            }
-            return total;
+            return m_words.popcount();
         }
 
         int dag_phase() const {
@@ -180,19 +160,13 @@ class MajoranaMonomial {
         std::pair<int, int> fermion_parity() const {
             int up = 0;
             int dn = 0;
-            for (std::size_t word_idx = 0; word_idx < n_words; ++word_idx) {
-                auto word = m_words[word_idx];
-                while (word != 0) {
-                    const auto bit = std::countr_zero(word);
-                    const auto mode = 64 * word_idx + bit;
-                    if (mode % 4 < 2) {
-                        ++up;
-                    } else {
-                        ++dn;
-                    }
-                    word &= word - 1;
+            m_words.for_bits([&](std::size_t mode) {
+                if (mode % 4 < 2) {
+                    ++up;
+                } else {
+                    ++dn;
                 }
-            }
+            });
             return {up & 1, dn & 1};
         }
 
@@ -211,48 +185,25 @@ class MajoranaMonomial {
 
         int ph_parity() const {
             int count = 0;
-            for (std::size_t word_idx = 0; word_idx < n_words; ++word_idx) {
-                auto word = m_words[word_idx];
-                while (word != 0) {
-                    const auto bit = std::countr_zero(word);
-                    const auto mode = 64 * word_idx + bit;
-                    const auto site = mode / 4;
-                    const auto rem = mode % 4;
-                    const auto pm = rem % 2;
-                    count += static_cast<int>((site + pm) & 1);
-                    word &= word - 1;
-                }
-            }
+            m_words.for_bits([&](std::size_t mode) {
+                const auto site = mode / 4;
+                const auto pm = mode % 2;
+                count += static_cast<int>((site + pm) & 1);
+            });
             return count & 1;
         }
 
         // @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ physical/symmetry operations
         std::pair<MajoranaMonomial, int> mul(const MajoranaMonomial& other) const {
             int sign = 1;
-            for (std::size_t word_idx = 0; word_idx < n_words; ++word_idx) {
-                auto word = other.m_words[word_idx];
-                while (word != 0) {
-                    const auto bit = std::countr_zero(word);
-
-                    int count = 0;
-                    if (bit < 63) {
-                        count += std::popcount(m_words[word_idx] >> (bit + 1));
-                    }
-                    for (std::size_t idx = word_idx + 1; idx < n_words; ++idx) {
-                        count += std::popcount(m_words[idx]);
-                    }
-                    if (count & 1) {
-                        sign = -sign;
-                    }
-
-                    word &= word - 1;
+            other.m_words.for_bits([&](std::size_t mode) {
+                if (m_words.popcount_above(mode) & 1) {
+                    sign = -sign;
                 }
-            }
+            });
 
             MajoranaMonomial result;
-            for (std::size_t idx = 0; idx < n_words; ++idx) {
-                result.m_words[idx] = m_words[idx] ^ other.m_words[idx];
-            }
+            result.m_words = m_words ^ other.m_words;
             return {result, sign};
         }
 
@@ -395,12 +346,12 @@ class MajoranaMonomial {
 
         bool get_bit(std::size_t mode) const {
             check_mode(mode);
-            return (m_words[mode / 64] >> (mode % 64)) & 1;
+            return m_words.get_bit(mode);
         }
 
         void set_bit(std::size_t mode) {
             check_mode(mode);
-            m_words[mode / 64] |= std::uint64_t{1} << (mode % 64);
+            m_words.set_bit(mode);
         }
 
         // fn must map occupied modes injectively into valid modes; this helper is for symmetry permutations.
@@ -409,28 +360,12 @@ class MajoranaMonomial {
             MajoranaMonomial result;
             std::size_t swaps = 0;
             int sign = 1;
-            for (std::size_t word_idx = 0; word_idx < n_words; ++word_idx) {
-                auto word = m_words[word_idx];
-                while (word != 0) {
-                    const auto bit = std::countr_zero(word);
-                    const auto mode = 64 * word_idx + bit;
-                    const auto [new_mode, local_sign] = fn(mode);
-                    const auto new_word_idx = new_mode / 64;
-                    const auto new_bit = new_mode % 64;
-
-                    int count = 0;
-                    if (new_bit < 63) {
-                        count += std::popcount(result.m_words[new_word_idx] >> (new_bit + 1));
-                    }
-                    for (std::size_t idx = new_word_idx + 1; idx < n_words; ++idx) {
-                        count += std::popcount(result.m_words[idx]);
-                    }
-                    swaps += count;
-                    sign *= local_sign;
-                    result.set_bit(new_mode);
-                    word &= word - 1;
-                }
-            }
+            m_words.for_bits([&](std::size_t mode) {
+                const auto [new_mode, local_sign] = fn(mode);
+                swaps += static_cast<std::size_t>(result.m_words.popcount_above(new_mode));
+                sign *= local_sign;
+                result.set_bit(new_mode);
+            });
             return {result, sign * ((swaps & 1) ? -1 : 1)};
         }
 };

@@ -42,7 +42,7 @@ def _majorana(L: int):
     return load_module(
         'majorana',
         _CPP_PATH / 'bindings' / 'majorana.cpp.in',
-        (_CPP_PATH / 'majorana.hpp', _CPP_PATH / 'py_mask.hpp'),
+        (_CPP_PATH / 'majorana.hpp', _CPP_PATH / 'words.hpp', _CPP_PATH / 'py_words.hpp'),
         _CACHE_PATH / 'majorana',
         L=L,
     )
@@ -55,7 +55,7 @@ def _majorana_square(Lx: int, Ly: int):
     return load_module(
         'majorana_square',
         _CPP_PATH / 'bindings' / 'majorana_square.cpp.in',
-        (_CPP_PATH / 'majorana_square.hpp', _CPP_PATH / 'py_mask.hpp'),
+        (_CPP_PATH / 'majorana_square.hpp', _CPP_PATH / 'words.hpp', _CPP_PATH / 'py_words.hpp'),
         _CACHE_PATH / 'majorana_square',
         Lx=Lx,
         Ly=Ly,
@@ -69,7 +69,7 @@ def _pauli(L: int):
     return load_module(
         'pauli',
         _CPP_PATH / 'bindings' / 'pauli.cpp.in',
-        (_CPP_PATH / 'pauli.hpp', _CPP_PATH / 'py_mask.hpp'),
+        (_CPP_PATH / 'pauli.hpp', _CPP_PATH / 'words.hpp', _CPP_PATH / 'py_words.hpp'),
         _CACHE_PATH / 'pauli',
         L=L,
     )
