@@ -553,7 +553,7 @@ class ScsSDPSolver:
 
     def __init__(self):
         self.data = None        # SDPData
-        self.problem = None     # (scs_data, cone, layout) from _to_scs
+        self.problem = None     # (scs_data, cone, layout) from _to_scs; scs_data is None after solve to save memory
         self.scs_output = None  # raw scs output {'x', 'y', 's', 'info'}
         self.status = None
 
@@ -588,11 +588,17 @@ class ScsSDPSolver:
         opts.setdefault('adaptive_diag_scale', 0)  # SCS >= 3.3: ~10x slower with real PSD blocks
 
         scs_data, cone, layout = self.problem
+        if scs_data is None:
+            raise ValueError('scs_data was released by the previous solve, build the problem again')
+        # the warm start needs scs_data, so it is computed before scs_data is released
+        x, y, s = (None, None, None) if warm_data is None else self._import_warm(warm_data)
         solver = scs.SCS(scs_data, cone, **opts)
+        # SCS keeps its own copy of scs_data, so it is safe to release scs_data on the python side
+        self.problem = (None, cone, layout)
+        del scs_data
         if warm_data is None:
             self.scs_output = solver.solve(warm_start=False)
         else:
-            x, y, s = self._import_warm(warm_data)
             self.scs_output = solver.solve(warm_start=True, x=x, y=y, s=s)
         info = self.scs_output['info']
         self.status = self.STATUS.get(info['status_val'], 'solver_error')
@@ -871,20 +877,26 @@ class ScsSDPSolver:
                 block_offsets[k] = row
                 row += A_blk.shape[0]
 
+        cone = {'z': n_z, 'l': n_l}
+        for kind in ('s', 'cs'):
+            if psd_parts[kind]:
+                cone[kind] = [block_dims[k] for k, _, _ in psd_parts[kind]]
+        del psd_parts
+
         if A_parts:
-            A = sp.sparse.vstack(A_parts, format='csc')
+            # stacking CSR blocks by rows only concatenates their arrays,
+            # while format='csc' would build an intermediate COO copy of A;
+            # the conversion to CSC, as required by SCS, is done afterwards.
+            A = sp.sparse.vstack(A_parts, format='csr')
             b = np.concatenate(b_parts)
+            del A_parts, b_parts
+            A = A.tocsc()
         else:
             A = sp.sparse.csc_matrix((0, n))
             b = np.zeros(0)
         A = sp.sparse.csc_matrix(A, dtype=float)
         A.eliminate_zeros()
         A.sort_indices()
-
-        cone = {'z': n_z, 'l': n_l}
-        for kind in ('s', 'cs'):
-            if psd_parts[kind]:
-                cone[kind] = [block_dims[k] for k, _, _ in psd_parts[kind]]
 
         scs_data = {'A': A, 'b': np.ascontiguousarray(b, dtype=float), 'c': np.ascontiguousarray(c, dtype=float)}
         layout = {
@@ -953,6 +965,8 @@ class ScsSDPSolver:
             raise ValueError('_import_warm: SDPData.var_keys is not set (one key per variable)')
 
         scs_data, cone, layout = self.problem
+        if scs_data is None:
+            raise ValueError('scs_data was released by the previous solve, build the problem again')
         n_z, n_l = cone['z'], cone['l']
 
         x = np.array([warm.x.get(key, 0.) for key in data.var_keys], dtype=float)

@@ -54,6 +54,8 @@ if __name__ == '__main__':
             wall_w = time.perf_counter() - start
             iters_w = runner.solver.summary()['num_iters']
             line_warm = f'{iters_w:6d} it {wall_w:7.2f} s {runner.solver.status}'
+            # the warm solve releases scs_data, so the same SDPData is built again for the cold solve
+            runner.solver.build(runner.solver.data)
 
         runner.solve()
         record = runner.record
