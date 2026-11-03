@@ -4,7 +4,7 @@ import numpy as np
 import scipy as sp
 
 from operators.pauli import PauliString, PauliOperator, _PAULI_PHASE, _PAULI_MUL_PHASE_POWER
-from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
+from sdp import AffineExpr, PSDConstraints, AffineConstraints, SDPData
 
 _CACHE_MAX_SIZE = 10_000_000
 
@@ -96,15 +96,15 @@ class IsingCompiler:
 
     # SDP objective
     obj_op: PauliOperator
-    obj_expr: LinearExpr
+    obj_expr: AffineExpr
     obj_sense: str
     e_lb: float | None
     e_ub: float | None
-    energy_ineqs: list[LinearExpr]
+    energy_ineqs: list[AffineExpr]
 
     # uncertified observables
     obs_ops: dict[str, PauliOperator | list[PauliOperator]]
-    obs_exprs: dict[str, LinearExpr | list[LinearExpr]]
+    obs_exprs: dict[str, AffineExpr | list[AffineExpr]]
 
     def __init__(self,
         params: IsingParams,
@@ -384,7 +384,7 @@ class IsingCompiler:
                     op.add(prod, 2 * h_coeff * _PAULI_PHASE[phase_power & 3])
         return op
 
-    def _compile_hamil_ward(self, pstr: PauliString) -> LinearExpr | None:
+    def _compile_hamil_ward(self, pstr: PauliString) -> AffineExpr | None:
         expr = {}
         seen = set()
         support = pstr.mask
@@ -421,7 +421,7 @@ class IsingCompiler:
                 if expr[idx] == 0:
                     del expr[idx]
 
-        return LinearExpr(terms=expr, const=0)
+        return AffineExpr(terms=expr, const=0)
 
     def _add_hamil_wards(self):
         r'''
@@ -479,13 +479,13 @@ class IsingCompiler:
         id_key = self._sym_canon(PauliString.from_str('I'*self.L))
         if id_key not in self.var_index:
             raise ValueError('current basis cannot represent the identity operator')
-        self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
+        self.affines.add(AffineExpr(terms={self.var_index[id_key]: 1}, const=-1))
 
         self._add_hamil_wards()
 
         self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-12)
 
-    def _compile_expr(self, op: PauliOperator) -> LinearExpr | None:
+    def _compile_expr(self, op: PauliOperator) -> AffineExpr | None:
         expr = {}
         for pstr, coeff in op.terms.items():
             if not self._sym_allowed(pstr):
@@ -497,7 +497,7 @@ class IsingCompiler:
             expr[idx] = expr.get(idx, 0) + coeff
             if expr[idx] == 0:
                 del expr[idx]
-        return LinearExpr(terms=expr, const=0)
+        return AffineExpr(terms=expr, const=0)
 
     def compile(self, basis_reprs: list[PauliString]):
         self.basis_reprs = list(basis_reprs)
@@ -517,12 +517,12 @@ class IsingCompiler:
             raise ValueError('current basis cannot represent the Hamiltonian')
 
         if self.e_lb is not None:
-            self.energy_ineqs.append(LinearExpr(
+            self.energy_ineqs.append(AffineExpr(
                 terms=hamil_expr.terms.copy(),
                 const=hamil_expr.const - self.e_lb,
             ))
         if self.e_ub is not None:
-            self.energy_ineqs.append(LinearExpr(
+            self.energy_ineqs.append(AffineExpr(
                 terms={idx: -coeff for idx, coeff in hamil_expr.terms.items()},
                 const=self.e_ub - hamil_expr.const,
             ))
@@ -584,7 +584,7 @@ class IsingCompiler:
         self._descendants_cache[pstr.mask] = descs
         return descs
 
-    def _get_expr_str(self, expr: LinearExpr) -> str:
+    def _get_expr_str(self, expr: AffineExpr) -> str:
         parts = [
             f'{coeff}*<{str(self.vars[idx])}>'
             for idx, coeff in expr.terms.items()

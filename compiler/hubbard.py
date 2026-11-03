@@ -5,7 +5,7 @@ import scipy as sp
 
 from compiler.core import HubbardCompilerCore
 from operators.majorana import MajoranaMonomial, MajoranaOperator
-from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
+from sdp import AffineExpr, PSDConstraints, AffineConstraints, SDPData
 
 
 @dataclass(slots=True)
@@ -118,15 +118,15 @@ class HubbardCompiler:
 
     # SDP objective
     obj_op: MajoranaOperator
-    obj_expr: LinearExpr
+    obj_expr: AffineExpr
     obj_sense: str
     e_lb: float | None
     e_ub: float | None
-    energy_ineqs: list[LinearExpr]
+    energy_ineqs: list[AffineExpr]
 
     # uncertified observables
     obs_ops: dict[str, MajoranaOperator | list[MajoranaOperator]]
-    obs_exprs: dict[str, LinearExpr | list[LinearExpr]]
+    obs_exprs: dict[str, AffineExpr | list[AffineExpr]]
 
     def __init__(self,
         params: HubbardParams,
@@ -358,18 +358,18 @@ class HubbardCompiler:
             offsets, idxs, coeffs = self._core.build_ward_identities(charge)
             offsets, idxs, coeffs = offsets.tolist(), idxs.tolist(), coeffs.tolist()
             for start, end in zip(offsets[:-1], offsets[1:]):
-                self.affines.add(LinearExpr(terms=dict(zip(idxs[start:end], coeffs[start:end])), const=0))
+                self.affines.add(AffineExpr(terms=dict(zip(idxs[start:end], coeffs[start:end])), const=0))
             self.ward_ops[charge] = len(offsets) - 1
 
         self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-12)
 
-    def _compile_expr(self, op: MajoranaOperator) -> LinearExpr | None:
+    def _compile_expr(self, op: MajoranaOperator) -> AffineExpr | None:
         # None if a term cannot be represented by an SDP variable
         expr = self._core.compile_expr(list(op.terms), list(op.terms.values()))
         if expr is None:
             return None
         idxs, coeffs = expr
-        return LinearExpr(terms=dict(zip(idxs.tolist(), coeffs.tolist())), const=0)
+        return AffineExpr(terms=dict(zip(idxs.tolist(), coeffs.tolist())), const=0)
 
     def compile(self, basis_reprs: list[MajoranaMonomial]):
         # build SDP variables
@@ -388,12 +388,12 @@ class HubbardCompiler:
             raise ValueError('current basis cannot represent the Hamiltonian')
 
         if self.e_lb is not None:
-            self.energy_ineqs.append(LinearExpr(
+            self.energy_ineqs.append(AffineExpr(
                 terms=hamil_expr.terms.copy(),
                 const=hamil_expr.const - self.e_lb
             ))
         if self.e_ub is not None:
-            self.energy_ineqs.append(LinearExpr(
+            self.energy_ineqs.append(AffineExpr(
                 terms={idx: -coeff for idx, coeff in hamil_expr.terms.items()},
                 const=self.e_ub - hamil_expr.const
             ))
@@ -433,7 +433,7 @@ class HubbardCompiler:
         '''
         return self._core.descendants(monomial)
 
-    def _get_expr_str(self, expr: LinearExpr) -> str:
+    def _get_expr_str(self, expr: AffineExpr) -> str:
         parts = [
             f'{coeff*self.vars[idx].hermitian_phase()}*<{str(self.vars[idx])}>'
             for idx, coeff in expr.terms.items()

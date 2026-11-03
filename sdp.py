@@ -6,17 +6,17 @@ import scipy as sp
 import sksparse.spqr as spqr
 
 @dataclass(slots=True)
-class LinearExpr:
+class AffineExpr:
     '''
         Compiled affine expression of moment variables
     '''
     terms: dict[int, float|complex] = field(default_factory=dict)
     const: float|complex = 0
 
-    def realify(self) -> list['LinearExpr']:
+    def realify(self) -> list['AffineExpr']:
         r'''
             realification of the equation \sum_k c_k m_k + c_0 = 0: returns the non-empty real and
-            imaginary parts \sum_k Re(c_k) m_k + Re(c_0) and \sum_k Im(c_k) m_k + Im(c_0) as real LinearExprs.
+            imaginary parts \sum_k Re(c_k) m_k + Re(c_0) and \sum_k Im(c_k) m_k + Im(c_0) as real AffineExprs.
 
             assumes real moment variables m_k (var_cpx = False).
         '''
@@ -34,14 +34,14 @@ class LinearExpr:
 
         exprs = []
 
-        real_expr = LinearExpr(
+        real_expr = AffineExpr(
             terms=real_terms,
             const=self.const.real if isinstance(self.const, complex) else self.const,
         )
         if real_expr.terms or real_expr.const != 0:
             exprs.append(real_expr)
 
-        imag_expr = LinearExpr(
+        imag_expr = AffineExpr(
             terms=imag_terms,
             const=self.const.imag if isinstance(self.const, complex) else 0,
         )
@@ -177,7 +177,7 @@ class AffineConstraints:
     vals: list[float|complex] = field(default_factory=list)
     n_rows: int = 0
 
-    def add(self, expr: LinearExpr):
+    def add(self, expr: AffineExpr):
         for real_expr in expr.realify():
             for idx, coeff in real_expr.terms.items():
                 self.rows.append(self.n_rows)
@@ -245,12 +245,12 @@ class AffineConstraints:
 class SDPData:
     var_cpx: bool
     n_vars: int
-    objective: LinearExpr
+    objective: AffineExpr
     objective_sense: str
     psd_blocks: list[PSDConstraints]
     affines_mat: sp.sparse.csr_matrix
-    observables: dict[str, LinearExpr | list[LinearExpr]]
-    energy_ineqs: list[LinearExpr]
+    observables: dict[str, AffineExpr | list[AffineExpr]]
+    energy_ineqs: list[AffineExpr]
 
     # optional (set by the compiler): hashable key of each variable;
     # the same key in two SDPData means the same moment variable. None means no key is given.
@@ -336,7 +336,7 @@ class SDPSolver:
         self.observables = None
         self.status = None
 
-    def _to_cp_expr(self, expr: LinearExpr):
+    def _to_cp_expr(self, expr: AffineExpr):
         import cvxpy as cp
         res = cp.Constant(expr.const)
         for idx, coeff in expr.terms.items():
@@ -659,7 +659,7 @@ class ScsSDPSolver:
             return -layout['obj_sign'] * np.inf
         return layout['obj_sign'] * self.scs_output['info']['pobj'] + layout['obj_const']
 
-    def _eval(self, expr: LinearExpr):
+    def _eval(self, expr: AffineExpr):
         # as cvxpy: no value without a solution
         if self.status not in self.SOLVED:
             return None
@@ -799,7 +799,7 @@ class ScsSDPSolver:
                 v = v.real
             return np.asarray(v, dtype=float)
 
-        def row_of(expr: LinearExpr):
+        def row_of(expr: AffineExpr):
             cols = np.fromiter(expr.terms.keys(), dtype=np.int64, count=len(expr.terms))
             vals = np.array(list(expr.terms.values()), dtype=complex).real
             return cols, vals, complex(expr.const).real

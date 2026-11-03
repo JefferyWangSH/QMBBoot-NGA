@@ -7,7 +7,7 @@ import scipy as sp
 
 from operators.majorana import _SPIN_LADDER_TERMS, _ETA_LADDER_TERMS
 from operators.majorana_square import MajoranaMonomialSquare, MajoranaSquareOperator
-from sdp import LinearExpr, PSDConstraints, AffineConstraints, SDPData
+from sdp import AffineExpr, PSDConstraints, AffineConstraints, SDPData
 
 _USE_JIT = os.environ.get('USE_JIT', '1') != '0'
 if _USE_JIT:
@@ -145,14 +145,14 @@ class HubbardSquareCompiler:
     number_op: MajoranaSquareOperator | None
 
     obj_op: MajoranaSquareOperator | None
-    obj_expr: LinearExpr
+    obj_expr: AffineExpr
     obj_sense: str
     e_lb: float | None
     e_ub: float | None
-    energy_ineqs: list[LinearExpr]
+    energy_ineqs: list[AffineExpr]
 
     obs_ops: dict[str, MajoranaSquareOperator | list[MajoranaSquareOperator]]
-    obs_exprs: dict[str, LinearExpr | list[LinearExpr]]
+    obs_exprs: dict[str, AffineExpr | list[AffineExpr]]
 
     def __init__(
         self,
@@ -338,7 +338,7 @@ class HubbardSquareCompiler:
             return canon_key, canon_sign
         return canon_key
 
-    def _compile_expr(self, op: MajoranaSquareOperator) -> LinearExpr | None:
+    def _compile_expr(self, op: MajoranaSquareOperator) -> AffineExpr | None:
         expr = {}
         for monomial, coeff in op.terms.items():
             if not self._sym_allowed(monomial):
@@ -353,7 +353,7 @@ class HubbardSquareCompiler:
             expr[idx] = expr.get(idx, 0) + coeff * canon_sign / monomial.hermitian_phase()
             if expr[idx] == 0:
                 del expr[idx]
-        return LinearExpr(terms=expr, const=0)
+        return AffineExpr(terms=expr, const=0)
 
     def _build_vars(self):
         r'''
@@ -664,7 +664,7 @@ class HubbardSquareCompiler:
         id_key = self._sym_canon(MajoranaMonomialSquare.identity(self.Lx, self.Ly))
         if id_key not in self.var_index:
             raise ValueError('current basis cannot represent the identity operator')
-        self.affines.add(LinearExpr(terms={self.var_index[id_key]: 1}, const=-1))
+        self.affines.add(AffineExpr(terms={self.var_index[id_key]: 1}, const=-1))
 
         if self.n_particles is not None:
             number_shift = self.number_op.copy()
@@ -713,7 +713,7 @@ class HubbardSquareCompiler:
                     op.add(prod, 2 * h_coeff * sign)
         return op
 
-    def _compile_hamil_ward(self, monomial: MajoranaMonomialSquare) -> LinearExpr | None:
+    def _compile_hamil_ward(self, monomial: MajoranaMonomialSquare) -> AffineExpr | None:
         expr = {}
         seen = set()
         support = monomial.mask
@@ -747,9 +747,9 @@ class HubbardSquareCompiler:
                 if expr[idx] == 0:
                     del expr[idx]
 
-        return LinearExpr(terms=expr, const=0)
+        return AffineExpr(terms=expr, const=0)
 
-    def _compile_number_ward(self, monomial: MajoranaMonomialSquare, spin: str) -> LinearExpr | None:
+    def _compile_number_ward(self, monomial: MajoranaMonomialSquare, spin: str) -> AffineExpr | None:
         assert spin in ('u', 'd')
         spin_offset = 0 if spin == 'u' else 2
         expr = {}
@@ -785,9 +785,9 @@ class HubbardSquareCompiler:
             if expr[idx] == 0:
                 del expr[idx]
 
-        return LinearExpr(terms=expr, const=0)
+        return AffineExpr(terms=expr, const=0)
 
-    def _compile_spin_ward(self, monomial: MajoranaMonomialSquare, spin: str) -> LinearExpr | None:
+    def _compile_spin_ward(self, monomial: MajoranaMonomialSquare, spin: str) -> AffineExpr | None:
         assert spin in ('+', '-')
         expr = {}
         support = monomial.mask
@@ -822,9 +822,9 @@ class HubbardSquareCompiler:
                 if expr[idx] == 0:
                     del expr[idx]
 
-        return LinearExpr(terms=expr, const=0)
+        return AffineExpr(terms=expr, const=0)
 
-    def _compile_eta_ward(self, monomial: MajoranaMonomialSquare, axis: str) -> LinearExpr | None:
+    def _compile_eta_ward(self, monomial: MajoranaMonomialSquare, axis: str) -> AffineExpr | None:
         assert axis in ('+', '-')
         expr = {}
         support = monomial.mask
@@ -862,7 +862,7 @@ class HubbardSquareCompiler:
                 if expr[idx] == 0:
                     del expr[idx]
 
-        return LinearExpr(terms=expr, const=0)
+        return AffineExpr(terms=expr, const=0)
 
     def compile(self, basis_reprs: list[MajoranaMonomialSquare]):
         self.basis_reprs = basis_reprs
@@ -878,12 +878,12 @@ class HubbardSquareCompiler:
             raise ValueError('current basis cannot represent the Hamiltonian')
 
         if self.e_lb is not None:
-            self.energy_ineqs.append(LinearExpr(
+            self.energy_ineqs.append(AffineExpr(
                 terms=hamil_expr.terms.copy(),
                 const=hamil_expr.const - self.e_lb,
             ))
         if self.e_ub is not None:
-            self.energy_ineqs.append(LinearExpr(
+            self.energy_ineqs.append(AffineExpr(
                 terms={idx: -coeff for idx, coeff in hamil_expr.terms.items()},
                 const=self.e_ub - hamil_expr.const,
             ))
@@ -943,7 +943,7 @@ class HubbardSquareCompiler:
         self._descendants_cache[monomial.mask] = descs
         return descs
 
-    def _get_expr_str(self, expr: LinearExpr) -> str:
+    def _get_expr_str(self, expr: AffineExpr) -> str:
         parts = [
             f'{coeff * self.vars[idx].hermitian_phase()}*<{str(self.vars[idx])}>'
             for idx, coeff in expr.terms.items()
