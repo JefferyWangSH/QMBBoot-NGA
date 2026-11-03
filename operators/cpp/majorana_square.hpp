@@ -12,6 +12,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -505,3 +506,10 @@ class MajoranaMonomialSquare {
 };
 
 }  // namespace qmbboot::operators
+
+template <std::size_t Lx, std::size_t Ly>
+struct std::hash<qmbboot::operators::MajoranaMonomialSquare<Lx, Ly>> {
+    std::size_t operator()(const qmbboot::operators::MajoranaMonomialSquare<Lx, Ly>& monomial) const {
+        return std::hash<std::remove_cvref_t<decltype(monomial.words())>>{}(monomial.words());
+    }
+};

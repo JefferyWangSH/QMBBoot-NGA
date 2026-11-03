@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -295,3 +296,10 @@ class PauliString {
 };
 
 }  // namespace qmbboot::operators
+
+template <std::size_t L>
+struct std::hash<qmbboot::operators::PauliString<L>> {
+    std::size_t operator()(const qmbboot::operators::PauliString<L>& pstr) const {
+        return std::hash<std::remove_cvref_t<decltype(pstr.words())>>{}(pstr.words());
+    }
+};

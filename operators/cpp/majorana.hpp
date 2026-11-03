@@ -12,6 +12,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -371,3 +372,10 @@ class MajoranaMonomial {
 };
 
 }  // namespace qmbboot::operators
+
+template <std::size_t L>
+struct std::hash<qmbboot::operators::MajoranaMonomial<L>> {
+    std::size_t operator()(const qmbboot::operators::MajoranaMonomial<L>& monomial) const {
+        return std::hash<std::remove_cvref_t<decltype(monomial.words())>>{}(monomial.words());
+    }
+};
