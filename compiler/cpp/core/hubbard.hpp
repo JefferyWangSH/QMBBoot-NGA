@@ -17,6 +17,8 @@
 namespace qmbboot::compiler::core {
 
 using qmbboot::operators::Words;
+using qmbboot::operators::_MAJORANA_SPIN_LADDER_TERMS;
+using qmbboot::operators::_MAJORANA_ETA_LADDER_TERMS;
 
 enum class HubbardWardCharge { hamil, number_up, number_dn, spin_plus, eta_plus };
 
@@ -28,37 +30,6 @@ class HubbardCompilerCore {
         static constexpr std::size_t n_words = MajoranaMonomial::n_words;
 
     private:
-        // local Majorana-bilinear expansion of S^+_i and S^-_i, as in operators/majorana.py:
-        // entries are (mode1, mode2, coeff) for coeff * gamma_{i,mode1} gamma_{i,mode2},
-        // with mode = (u+, u-, d+, d-) = (0, 1, 2, 3) in Majorana normal order.
-        static constexpr std::array<std::tuple<std::size_t, std::size_t, Complex>, 4> spin_plus_terms{{
-            {0, 2, Complex{0.25, 0.0}},
-            {0, 3, Complex{0.0, 0.25}},
-            {1, 2, Complex{0.0, -0.25}},
-            {1, 3, Complex{0.25, 0.0}},
-        }};
-        static constexpr std::array<std::tuple<std::size_t, std::size_t, Complex>, 4> spin_minus_terms{{
-            {0, 2, Complex{-0.25, 0.0}},
-            {0, 3, Complex{0.0, 0.25}},
-            {1, 2, Complex{0.0, -0.25}},
-            {1, 3, Complex{-0.25, 0.0}},
-        }};
-
-        // local Majorana-bilinear expansion of \eta^+_i and \eta^-_i,
-        // excluding the staggered phase, as in operators/majorana.py
-        static constexpr std::array<std::tuple<std::size_t, std::size_t, Complex>, 4> eta_plus_terms{{
-            {0, 2, Complex{0.25, 0.0}},
-            {0, 3, Complex{0.0, -0.25}},
-            {1, 2, Complex{0.0, -0.25}},
-            {1, 3, Complex{-0.25, 0.0}},
-        }};
-        static constexpr std::array<std::tuple<std::size_t, std::size_t, Complex>, 4> eta_minus_terms{{
-            {0, 2, Complex{-0.25, 0.0}},
-            {0, 3, Complex{0.0, -0.25}},
-            {1, 2, Complex{0.0, -0.25}},
-            {1, 3, Complex{0.25, 0.0}},
-        }};
-
         // a term coeff * H_t of the Hamiltonian; H_t is a Majorana monomial.
         // words: the mask of H_t (bit m set if gamma_m is in H_t)
         // coeff: the coefficient of the total H (L times the one of the energy density)
@@ -545,7 +516,7 @@ class HubbardCompilerCore {
 
         std::vector<MajoranaMonomial> spin_generators(const MajoranaMonomial& var, std::size_t pm) const {
             const auto& words = var.words();
-            const auto& table = pm == 0 ? spin_plus_terms : spin_minus_terms;
+            const auto& table = _MAJORANA_SPIN_LADDER_TERMS[pm];
             std::vector<MajoranaMonomial> generators;
             for_sites(words, [&](std::size_t site) {
                 for (const auto& [rem1, rem2, coeff] : table) {
@@ -568,7 +539,7 @@ class HubbardCompilerCore {
 
         std::optional<LinearExpr> spin_ward(const MajoranaMonomial& generator, std::size_t pm) const {
             const auto& words = generator.words();
-            const auto& table = pm == 0 ? spin_plus_terms : spin_minus_terms;
+            const auto& table = _MAJORANA_SPIN_LADDER_TERMS[pm];
             LinearExpr expr;
             bool missing = false;
             for_sites(words, [&](std::size_t site) {
@@ -614,7 +585,7 @@ class HubbardCompilerCore {
         // <[eta^z, O]> == 0 has been covered by total-number conservation.
         std::vector<MajoranaMonomial> eta_generators(const MajoranaMonomial& var, std::size_t pm) const {
             const auto& words = var.words();
-            const auto& table = pm == 0 ? eta_plus_terms : eta_minus_terms;
+            const auto& table = _MAJORANA_ETA_LADDER_TERMS[pm];
             std::vector<MajoranaMonomial> generators;
             for_sites(words, [&](std::size_t site) {
                 for (const auto& [rem1, rem2, coeff] : table) {
@@ -637,7 +608,7 @@ class HubbardCompilerCore {
 
         std::optional<LinearExpr> eta_ward(const MajoranaMonomial& generator, std::size_t pm) const {
             const auto& words = generator.words();
-            const auto& table = pm == 0 ? eta_plus_terms : eta_minus_terms;
+            const auto& table = _MAJORANA_ETA_LADDER_TERMS[pm];
             LinearExpr expr;
             bool missing = false;
             for_sites(words, [&](std::size_t site) {

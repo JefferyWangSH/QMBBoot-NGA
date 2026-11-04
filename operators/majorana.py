@@ -6,7 +6,7 @@ from functools import cached_property
     entries are (mode1, mode2, coeff) for coeff * gamma_{i,mode1} gamma_{i,mode2},
     with mode = (u+, u-, d+, d-) = (0, 1, 2, 3) in Majorana normal order.
 '''
-_SPIN_LADDER_TERMS = {
+_MAJORANA_SPIN_LADDER_TERMS = {
     '+': (
         (0, 2, +.25),
         (0, 3, +.25j),
@@ -24,7 +24,7 @@ _SPIN_LADDER_TERMS = {
 r'''
     local Majorana-bilinear expansion of \eta^+_i and \eta^-_i excluding the staggered phase
 '''
-_ETA_LADDER_TERMS = {
+_MAJORANA_ETA_LADDER_TERMS = {
     '+': (
         (0, 2, +.25),
         (0, 3, -.25j),

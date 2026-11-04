@@ -12,11 +12,49 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace qmbboot::operators {
+
+// local Majorana-bilinear expansion of S^+_i and S^-_i (index pm = 0, 1), as in operators/majorana.py:
+// entries are (mode1, mode2, coeff) for coeff * gamma_{i,mode1} gamma_{i,mode2},
+// with mode = (u+, u-, d+, d-) = (0, 1, 2, 3) in Majorana normal order.
+inline constexpr std::array<std::array<std::tuple<std::size_t, std::size_t, std::complex<double>>, 4>, 2>
+_MAJORANA_SPIN_LADDER_TERMS{{
+    {{
+        {0, 2, {0.25, 0.0}},
+        {0, 3, {0.0, 0.25}},
+        {1, 2, {0.0, -0.25}},
+        {1, 3, {0.25, 0.0}},
+    }},
+    {{
+        {0, 2, {-0.25, 0.0}},
+        {0, 3, {0.0, 0.25}},
+        {1, 2, {0.0, -0.25}},
+        {1, 3, {-0.25, 0.0}},
+    }},
+}};
+
+// local Majorana-bilinear expansion of \eta^+_i and \eta^-_i (index pm = 0, 1),
+// excluding the staggered phase, as in operators/majorana.py
+inline constexpr std::array<std::array<std::tuple<std::size_t, std::size_t, std::complex<double>>, 4>, 2>
+_MAJORANA_ETA_LADDER_TERMS{{
+    {{
+        {0, 2, {0.25, 0.0}},
+        {0, 3, {0.0, -0.25}},
+        {1, 2, {0.0, -0.25}},
+        {1, 3, {-0.25, 0.0}},
+    }},
+    {{
+        {0, 2, {-0.25, 0.0}},
+        {0, 3, {0.0, -0.25}},
+        {1, 2, {0.0, -0.25}},
+        {1, 3, {0.25, 0.0}},
+    }},
+}};
 
 template <std::size_t L_>
 class MajoranaMonomial {

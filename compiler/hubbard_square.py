@@ -1,24 +1,11 @@
 from dataclasses import dataclass
-from lru import LRU
 import itertools
-import os
 import numpy as np
 import scipy as sp
 
-from operators.majorana import _SPIN_LADDER_TERMS, _ETA_LADDER_TERMS
+from compiler.core import HubbardSquareCompilerCore
 from operators.majorana_square import MajoranaMonomialSquare, MajoranaSquareOperator
 from sdp import AffineExpr, PSDConstraints, AffineConstraints, SDPData
-
-_USE_JIT = os.environ.get('USE_JIT', '1') != '0'
-if _USE_JIT:
-    try:
-        from compiler.kernels.hubbard_square import sym_canon as _cpp_sym_canon
-    except ImportError:
-        _cpp_sym_canon = None
-else:
-    _cpp_sym_canon = None
-
-_CACHE_MAX_SIZE = 10_000_000
 
 
 @dataclass(slots=True)
@@ -129,8 +116,9 @@ class HubbardSquareCompiler:
     block_momenta: list[tuple[int, int]]
     block_keys: list[tuple[tuple[int, int], tuple[int, int], int | None]]
 
+    _core: HubbardSquareCompilerCore
+
     var_cpx: bool = False
-    var_index: dict[int, int]
     vars: list[MajoranaMonomialSquare]
     _moments_lookup: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None
 
@@ -141,7 +129,6 @@ class HubbardSquareCompiler:
     affines_mat: sp.sparse.csr_matrix
 
     hamil_op: MajoranaSquareOperator | None
-    _hamil_lookup: list[list[tuple[int, float | complex, tuple[int, ...]]]]
     number_op: MajoranaSquareOperator | None
 
     obj_op: MajoranaSquareOperator | None
@@ -181,25 +168,21 @@ class HubbardSquareCompiler:
             self.ward_ops['eta+'] = 0
 
         self.hamil_op = build_hamil(params)
-        self._hamil_lookup = [[] for _ in range(self.n_sites)]
-        for h_mono, h_coeff in self.hamil_op.terms.items():
-            h_mask = h_mono.mask
-            support = h_mask
-            lower_masks = []
-            while support:
-                bit = support & -support
-                mode = bit.bit_length() - 1
-                lower_masks.append((1 << mode) - 1)
-                support ^= bit
-
-            support = h_mask
-            while support:
-                bit = support & -support
-                site = (bit.bit_length() - 1) // 4
-                support &= ~(0xf << (4 * site))
-                self._hamil_lookup[site].append((h_mask, self.n_sites * h_coeff, tuple(lower_masks)))
-
         self.number_op = build_number(params)
+
+        # the C++ core takes over:
+        #   1) building the SDP variables and the moments lookup (OpenMP),
+        #   2) generating the Ward identities (OpenMP),
+        #   3) generating the descendants,
+        #   4) compiling Majorana operators into linear expressions of the SDP variables.
+        # the Hamiltonian coefficients are scaled from energy density to total H.
+        self._core = HubbardSquareCompilerCore(
+            Lx=self.Lx,
+            Ly=self.Ly,
+            hamil_monomials=list(self.hamil_op.terms),
+            hamil_coeffs=[self.n_sites * h_coeff for h_coeff in self.hamil_op.terms.values()],
+            use_ph_sym=self.use_ph_sym,
+        )
 
         if obj_sense not in ('min', 'max'):
             raise ValueError('objective sense must be min or max')
@@ -222,17 +205,10 @@ class HubbardSquareCompiler:
         self.obs_ops = {} if obs_ops is None else obs_ops.copy()
 
     def trans_canon(self, monomial: MajoranaMonomialSquare) -> int:
-        if not hasattr(self, '_trans_canon_cache'):
-            self._trans_canon_cache = LRU(_CACHE_MAX_SIZE)
-        if monomial.mask in self._trans_canon_cache:
-            return self._trans_canon_cache[monomial.mask]
-
-        key = MajoranaMonomialSquare(self.Lx, self.Ly, monomial.mask).trans_canon
-        self._trans_canon_cache[monomial.mask] = key
-        return key
+        return monomial.trans_canon
 
     def trans_canon_rep(self, monomial: MajoranaMonomialSquare) -> MajoranaMonomialSquare:
-        return MajoranaMonomialSquare(self.Lx, self.Ly, self.trans_canon(monomial))
+        return monomial.trans_canon_rep
 
     def fourier_phase(self, q: tuple[int, int], r: tuple[int, int]) -> complex:
         # q is the integer momentum-sector index;
@@ -261,121 +237,26 @@ class HubbardSquareCompiler:
                     return False
         return True
 
-    def _sym_allowed(self, monomial: MajoranaMonomialSquare) -> bool:
-        if not hasattr(self, '_sym_allowed_cache'):
-            self._sym_allowed_cache = LRU(_CACHE_MAX_SIZE)
-        if monomial.mask in self._sym_allowed_cache:
-            return self._sym_allowed_cache[monomial.mask]
-
-        allowed = (
-            monomial.fermion_parity(spin=True) == (0, 0)
-            and monomial.k_parity(hermitian=True) == 0
-            and (not self.use_ph_sym or monomial.ph_parity() == 0)
-        )
-        self._sym_allowed_cache[monomial.mask] = allowed
-        return allowed
-
-    def _sym_canon(self, monomial: MajoranaMonomialSquare, sign: bool = False):
-        if not hasattr(self, '_sym_canon_cache'):
-            self._sym_canon_cache = LRU(_CACHE_MAX_SIZE)
-        if monomial.mask in self._sym_canon_cache:
-            canon = self._sym_canon_cache[monomial.mask]
-            if canon is None:
-                return None
-            if sign:
-                return canon
-            return canon[0]
-
-        if _cpp_sym_canon is not None:
-            canon = _cpp_sym_canon(monomial, sign=True)
-            self._sym_canon_cache[monomial.mask] = canon
-            if canon is None:
-                return None
-            if sign:
-                return canon
-            return canon[0]
-
-        if any(trans_sign == -1 for _, trans_sign in monomial.trans_stabilizer()):
-            self._sym_canon_cache[monomial.mask] = None
-            return None
-
-        cands = []
-        for up_quarters, dn_quarters in itertools.product(range(4), repeat=2):
-            maj_rotated, maj_rotated_sign = monomial.majorana_c4_rotate(up_quarters, dn_quarters)
-
-            for exchange in (False, True):
-                exchanged = maj_rotated
-                exchanged_sign = maj_rotated_sign
-                if exchange:
-                    exchanged, step_sign = maj_rotated.spin_exchange()
-                    exchanged_sign *= step_sign
-
-                lat_quarters = range(4) if self.Lx == self.Ly else (0, 2)
-                for quarters in lat_quarters:
-                    lat_rotated, step_sign = exchanged.lattice_c4_rotate(quarters)
-                    lat_rotated_sign = exchanged_sign * step_sign
-
-                    for reflect in (False, True):
-                        lat_reflected = lat_rotated
-                        lat_reflected_sign = lat_rotated_sign
-                        if reflect:
-                            lat_reflected, step_sign = lat_rotated.lattice_reflect_x()
-                            lat_reflected_sign *= step_sign
-
-                        cand = lat_reflected.trans_canon
-                        cand_sign = lat_reflected_sign * lat_reflected.trans_canon_sign
-                        cands.append((cand, cand_sign))
-
-        canon_key = min(cand_key for cand_key, _ in cands)
-        signs = {cand_sign for cand_key, cand_sign in cands if cand_key == canon_key}
-        if len(signs) > 1:
-            self._sym_canon_cache[monomial.mask] = None
-            return None
-
-        canon_sign = signs.pop()
-        self._sym_canon_cache[monomial.mask] = (canon_key, canon_sign)
-        if sign:
-            return canon_key, canon_sign
-        return canon_key
-
     def _compile_expr(self, op: MajoranaSquareOperator) -> AffineExpr | None:
-        expr = {}
-        for monomial, coeff in op.terms.items():
-            if not self._sym_allowed(monomial):
-                continue
-            canon = self._sym_canon(monomial, sign=True)
-            if canon is None:
-                continue
-            key, canon_sign = canon
-            if key not in self.var_index:
-                return None
-            idx = self.var_index[key]
-            expr[idx] = expr.get(idx, 0) + coeff * canon_sign / monomial.hermitian_phase()
-            if expr[idx] == 0:
-                del expr[idx]
-        return AffineExpr(terms=expr, const=0)
+        # None if a term cannot be represented by an SDP variable
+        expr = self._core.compile_expr(list(op.terms), list(op.terms.values()))
+        if expr is None:
+            return None
+        idxs, coeffs = expr
+        return AffineExpr(terms=dict(zip(idxs.tolist(), coeffs.tolist())), const=0)
 
     def _build_vars(self):
         r'''
-            build SDP variables in one pass over (O_b, O_a, r), r = dx*Ly + dy the translation by (dx, dy);
-            keep the lookup (b, a, r) -> (var_idx, coeff) with (T_r O_a)^\dag O_b = coeff * m[var_idx]
-            in self._moments_lookup for _build_psd, which only adds the Fourier phases
-        '''
-        self.var_index = {}
-        self.vars = []
-        # adjoints[a][r] = (N[T_r O_a], s) with (T_r O_a)^\dag = s * N[T_r O_a] and s = trans_sign * dag_phase
-        adjoints = []
-        for monomial in self.basis_reprs:
-            dag_phase = monomial.dag_phase()
-            translates = [monomial.translate(dx, dy) for dx in range(self.Lx) for dy in range(self.Ly)]
-            adjoints.append([(monomial_r, trans_sign * dag_phase) for monomial_r, trans_sign in translates])
+            build SDP variables in one pass over (O_b, O_a, r), r = dx*Ly + dy the translation by (dx, dy),
+            and then keep the lookup (b, a, r) -> (var_idx, coeff) with (T_r O_a)^\dag O_b = coeff * m[var_idx] in
+            self._moments_lookup = (pair_offsets, pair_sizes, rs, idxs, coeffs)
+            for later use in _build_psd, which only adds the Fourier phases.
 
-        r'''
             for each pair (O_a, O_b) we record a list of terms (r, var_idx, coeff), one per translation r:
 
                 (T_r O_a)^\dag O_b = coeff * m[var_idx],   coeff = +-1 or +-i;
 
-            an r whose product is not _sym_allowed or has _sym_canon None gives no term.
+            an r whose product vanishes by symmetry gives no term.
             Only the pairs a >= b (lower triangle) are recorded because M(q) is Hermitian.
 
             This is a 3d array [b, a, r] with the missing r removed, flattened to 1d (as in CSR):
@@ -384,54 +265,15 @@ class HubbardSquareCompiler:
                 rs[t], idxs[t], coeffs[t]   (translation, variable index, coefficient),
 
             and the terms of the pair (a, b) are t in [pair_offsets[k], pair_offsets[k] + pair_sizes[k]),
-            k = b*n + a, n = len(basis_reprs).
+            k = b*n + a, n = len(basis_reprs); pair_offsets and pair_sizes have length n*n,
+            and the pairs a < b have size 0.
 
-            While building:
-                b_rs, b_idxs, b_coeffs   terms of the current O_b (all O_a), Python lists
-                rs, idxs, coeffs         one numpy chunk per O_b (converted after each O_b to save memory),
-                                         concatenated at the end
-                pair_offsets, pair_sizes index of the first term and number of terms of each pair, order b*n + a
-                n_terms                  number of terms before the current O_b
+            This is done by the C++ core with OpenMP:
+            self._core.build_vars clears and refills the variables and their lookup
+            inside the core in place, and returns the moments lookup.
         '''
-        pair_offsets, pair_sizes, rs, idxs, coeffs = [], [], [], [], []
-        n_terms = 0
-        for b, monomial_b in enumerate(self.basis_reprs):
-            b_rs, b_idxs, b_coeffs = [], [], []
-            for a, a_adjoints in enumerate(adjoints):
-                start = len(b_rs)
-                pair_offsets.append(n_terms + start)
-                if a < b:
-                    # lower triangle only
-                    pair_sizes.append(0)
-                    continue
-                for r, (monomial_ar, adj_sign) in enumerate(a_adjoints):
-                    monomial, mul_sign = monomial_ar.mul(monomial_b)
-
-                    if not self._sym_allowed(monomial):
-                        continue
-                    canon = self._sym_canon(monomial, sign=True)
-                    if canon is None:
-                        continue
-                    key, canon_sign = canon
-                    if key not in self.var_index:
-                        self.var_index[key] = len(self.vars)
-                        self.vars.append(MajoranaMonomialSquare(self.Lx, self.Ly, key))
-                    b_rs.append(r)
-                    b_idxs.append(self.var_index[key])
-                    b_coeffs.append(adj_sign * mul_sign * canon_sign / monomial.hermitian_phase())
-                pair_sizes.append(len(b_rs) - start)
-            rs.append(np.array(b_rs, dtype=np.int32))
-            idxs.append(np.array(b_idxs, dtype=np.int32))
-            coeffs.append(np.array(b_coeffs, dtype=complex))
-            n_terms += len(b_rs)
-
-        self._moments_lookup = (
-            np.array(pair_offsets, dtype=np.int64),
-            np.array(pair_sizes, dtype=np.int64),
-            np.concatenate(rs),
-            np.concatenate(idxs),
-            np.concatenate(coeffs),
-        )
+        self._moments_lookup = self._core.build_vars(self.basis_reprs)
+        self.vars = self._core.vars()
 
     def _build_block_reprs(self):
         self.block_reprs = []
@@ -521,150 +363,14 @@ class HubbardSquareCompiler:
                 psd.realify_phase = [monomial.k_parity(hermitian=False) for monomial in block_basis]
             self.psd_blocks.append(psd)
 
-    def _add_hamil_wards(self):
-        seen_masks = set()
-        seen_keys = set()
-
-        for var in self.vars:
-            support = var.mask
-            while support:
-                bit = support & -support
-                site = (bit.bit_length() - 1) // 4
-                support &= ~(0xf << (4 * site))
-
-                for h_mask, _, _ in self._hamil_lookup[site]:
-                    anticomm = (h_mask & var.mask).bit_count() & 1
-                    if not anticomm:
-                        continue
-
-                    mask = var.mask ^ h_mask
-                    if mask in seen_masks:
-                        continue
-                    seen_masks.add(mask)
-
-                    cand = MajoranaMonomialSquare(self.Lx, self.Ly, mask)
-                    key = self.trans_canon(cand)
-                    if key in seen_keys:
-                        continue
-                    seen_keys.add(key)
-
-                    expr = self._compile_hamil_ward(cand)
-                    if expr is None or not expr.terms:
-                        continue
-                    self.affines.add(expr)
-                    self.ward_ops['hamil'] += 1
-
-    def _add_number_wards(self, spin: str):
-        assert spin in ('u', 'd')
-        spin_offset = 0 if spin == 'u' else 2
-        seen_masks = set()
-        seen_keys = set()
-
-        for var in self.vars:
-            support = var.mask
-            while support:
-                bit = support & -support
-                mode = bit.bit_length() - 1
-                site, rem = divmod(mode, 4)
-                support ^= bit
-                if rem // 2 != spin_offset // 2:
-                    continue
-
-                number_mask = 0b11 << (4 * site + spin_offset)
-                if (var.mask & number_mask).bit_count() != 1:
-                    continue
-                mask = var.mask ^ number_mask
-                if mask in seen_masks:
-                    continue
-                seen_masks.add(mask)
-
-                cand = MajoranaMonomialSquare(self.Lx, self.Ly, mask)
-                key = self.trans_canon(cand)
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-
-                expr = self._compile_number_ward(cand, spin)
-                if expr is None or not expr.terms:
-                    continue
-                self.affines.add(expr)
-                self.ward_ops[f'N{spin}'] += 1
-
-    def _add_spin_wards(self, spin: str):
-        assert spin in ('+', '-')
-        seen_masks = set()
-        seen_keys = set()
-
-        for var in self.vars:
-            support = var.mask
-            while support:
-                bit = support & -support
-                site = (bit.bit_length() - 1) // 4
-                support &= ~(0xf << (4 * site))
-
-                for rem1, rem2, _ in _SPIN_LADDER_TERMS[spin]:
-                    spin_mask = (1 << (4 * site + rem1)) | (1 << (4 * site + rem2))
-                    if (var.mask & spin_mask).bit_count() != 1:
-                        continue
-                    mask = var.mask ^ spin_mask
-                    if mask in seen_masks:
-                        continue
-                    seen_masks.add(mask)
-
-                    cand = MajoranaMonomialSquare(self.Lx, self.Ly, mask)
-                    key = self.trans_canon(cand)
-                    if key in seen_keys:
-                        continue
-                    seen_keys.add(key)
-
-                    expr = self._compile_spin_ward(cand, spin)
-                    if expr is None or not expr.terms:
-                        continue
-                    self.affines.add(expr)
-                    self.ward_ops[f'S{spin}'] += 1
-
-    def _add_eta_wards(self, axis: str):
-        assert axis in ('+', '-')
-        seen_masks = set()
-        seen_keys = set()
-
-        for var in self.vars:
-            support = var.mask
-            while support:
-                bit = support & -support
-                site = (bit.bit_length() - 1) // 4
-                support &= ~(0xf << (4 * site))
-
-                for rem1, rem2, _ in _ETA_LADDER_TERMS[axis]:
-                    eta_mask = (1 << (4 * site + rem1)) | (1 << (4 * site + rem2))
-                    if (var.mask & eta_mask).bit_count() != 1:
-                        continue
-                    mask = var.mask ^ eta_mask
-                    if mask in seen_masks:
-                        continue
-                    seen_masks.add(mask)
-
-                    cand = MajoranaMonomialSquare(self.Lx, self.Ly, mask)
-                    key = self.trans_canon(cand)
-                    if key in seen_keys:
-                        continue
-                    seen_keys.add(key)
-
-                    expr = self._compile_eta_ward(cand, axis)
-                    if expr is None or not expr.terms:
-                        continue
-                    self.affines.add(expr)
-                    self.ward_ops[f'eta{axis}'] += 1
-
     def _build_affines(self):
         self.affines = AffineConstraints(n_vars=len(self.vars))
-        for key in self.ward_ops:
-            self.ward_ops[key] = 0
 
-        id_key = self._sym_canon(MajoranaMonomialSquare.identity(self.Lx, self.Ly))
-        if id_key not in self.var_index:
+        id_expr = self._compile_expr(MajoranaSquareOperator({MajoranaMonomialSquare.identity(self.Lx, self.Ly): 1}))
+        if id_expr is None:
             raise ValueError('current basis cannot represent the identity operator')
-        self.affines.add(AffineExpr(terms={self.var_index[id_key]: 1}, const=-1))
+        id_expr.const = -1
+        self.affines.add(id_expr)
 
         if self.n_particles is not None:
             number_shift = self.number_op.copy()
@@ -680,189 +386,24 @@ class HubbardSquareCompiler:
                 raise ValueError('current basis cannot represent the particle number variance operator')
             self.affines.add(number_var_expr)
 
-        self._add_hamil_wards()
-        self._add_number_wards('u')
-        self._add_number_wards('d')
-
-        # S^- Ward identities are redundant with S^+
-        self._add_spin_wards('+')
-
-        if self.use_eta_sym:
-            self._add_eta_wards('+')
+        # Ward identities <[C, O]> == 0 for each charge C in ward_ops.
+        #
+        # S^- Ward identities are redundant with S^+:
+        # they use the same Majorana bilinear masks and hence generate identical candidates O.
+        # because (S^+)^dag = S^- and O^dag = chi_O O, we have
+        #
+        #   [S^+, O] = -chi_O [S^-, O]^dag.
+        #
+        # so each S^- Ward identity maps one-to-one to the corresponding S^+ Ward identity
+        # after compiled to hermitianized real variables; the same holds for eta^-.
+        for charge in self.ward_ops:
+            offsets, idxs, coeffs = self._core.build_ward_identities(charge)
+            offsets, idxs, coeffs = offsets.tolist(), idxs.tolist(), coeffs.tolist()
+            for start, end in zip(offsets[:-1], offsets[1:]):
+                self.affines.add(AffineExpr(terms=dict(zip(idxs[start:end], coeffs[start:end])), const=0))
+            self.ward_ops[charge] = len(offsets) - 1
 
         self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-12)
-
-    def _hamil_comm(self, monomial: MajoranaMonomialSquare) -> MajoranaSquareOperator:
-        op = MajoranaSquareOperator()
-        seen = set()
-        support = monomial.mask
-        while support:
-            bit = support & -support
-            site = (bit.bit_length() - 1) // 4
-            support &= ~(0xf << (4 * site))
-
-            for h_mask, h_coeff, lower_masks in self._hamil_lookup[site]:
-                if h_mask in seen:
-                    continue
-                seen.add(h_mask)
-
-                anticomm = (h_mask & monomial.mask).bit_count() & 1
-                if anticomm:
-                    sign = -1 if sum((monomial.mask & lower_mask).bit_count() for lower_mask in lower_masks) & 1 else 1
-                    prod = MajoranaMonomialSquare(self.Lx, self.Ly, h_mask ^ monomial.mask)
-                    op.add(prod, 2 * h_coeff * sign)
-        return op
-
-    def _compile_hamil_ward(self, monomial: MajoranaMonomialSquare) -> AffineExpr | None:
-        expr = {}
-        seen = set()
-        support = monomial.mask
-        while support:
-            bit = support & -support
-            site = (bit.bit_length() - 1) // 4
-            support &= ~(0xf << (4 * site))
-
-            for h_mask, h_coeff, lower_masks in self._hamil_lookup[site]:
-                if h_mask in seen:
-                    continue
-                seen.add(h_mask)
-
-                anticomm = (h_mask & monomial.mask).bit_count() & 1
-                if not anticomm:
-                    continue
-
-                prod = MajoranaMonomialSquare(self.Lx, self.Ly, h_mask ^ monomial.mask)
-                if not self._sym_allowed(prod):
-                    continue
-                canon = self._sym_canon(prod, sign=True)
-                if canon is None:
-                    continue
-                key, canon_sign = canon
-                if key not in self.var_index:
-                    return None
-
-                sign = -1 if sum((monomial.mask & lower_mask).bit_count() for lower_mask in lower_masks) & 1 else 1
-                idx = self.var_index[key]
-                expr[idx] = expr.get(idx, 0) + 2 * h_coeff * sign * canon_sign / prod.hermitian_phase()
-                if expr[idx] == 0:
-                    del expr[idx]
-
-        return AffineExpr(terms=expr, const=0)
-
-    def _compile_number_ward(self, monomial: MajoranaMonomialSquare, spin: str) -> AffineExpr | None:
-        assert spin in ('u', 'd')
-        spin_offset = 0 if spin == 'u' else 2
-        expr = {}
-
-        support = monomial.mask
-        while support:
-            bit = support & -support
-            mode = bit.bit_length() - 1
-            site, rem = divmod(mode, 4)
-            support ^= bit
-            if rem // 2 != spin_offset // 2:
-                continue
-
-            lo_bit = 1 << (4 * site + spin_offset)
-            number_mask = lo_bit | (lo_bit << 1)
-            overlap = monomial.mask & number_mask
-            if overlap == 0 or overlap == number_mask:
-                continue
-
-            prod = MajoranaMonomialSquare(self.Lx, self.Ly, monomial.mask ^ number_mask)
-            if not self._sym_allowed(prod):
-                continue
-            canon = self._sym_canon(prod, sign=True)
-            if canon is None:
-                continue
-            key, canon_sign = canon
-            if key not in self.var_index:
-                return None
-
-            sign = -1 if overlap == lo_bit else 1
-            idx = self.var_index[key]
-            expr[idx] = expr.get(idx, 0) + 1j * sign * canon_sign / prod.hermitian_phase()
-            if expr[idx] == 0:
-                del expr[idx]
-
-        return AffineExpr(terms=expr, const=0)
-
-    def _compile_spin_ward(self, monomial: MajoranaMonomialSquare, spin: str) -> AffineExpr | None:
-        assert spin in ('+', '-')
-        expr = {}
-        support = monomial.mask
-        while support:
-            bit = support & -support
-            site = (bit.bit_length() - 1) // 4
-            support &= ~(0xf << (4 * site))
-
-            for rem1, rem2, coeff in _SPIN_LADDER_TERMS[spin]:
-                mode1 = 4 * site + rem1
-                mode2 = 4 * site + rem2
-                spin_mask = (1 << mode1) | (1 << mode2)
-                if (monomial.mask & spin_mask).bit_count() != 1:
-                    continue
-
-                prod = MajoranaMonomialSquare(self.Lx, self.Ly, monomial.mask ^ spin_mask)
-                if not self._sym_allowed(prod):
-                    continue
-                canon = self._sym_canon(prod, sign=True)
-                if canon is None:
-                    continue
-                key, canon_sign = canon
-                if key not in self.var_index:
-                    return None
-
-                sign = -1 if (
-                    (monomial.mask & ((1 << mode1) - 1)).bit_count()
-                    + (monomial.mask & ((1 << mode2) - 1)).bit_count()
-                ) & 1 else 1
-                idx = self.var_index[key]
-                expr[idx] = expr.get(idx, 0) + 2 * coeff * sign * canon_sign / prod.hermitian_phase()
-                if expr[idx] == 0:
-                    del expr[idx]
-
-        return AffineExpr(terms=expr, const=0)
-
-    def _compile_eta_ward(self, monomial: MajoranaMonomialSquare, axis: str) -> AffineExpr | None:
-        assert axis in ('+', '-')
-        expr = {}
-        support = monomial.mask
-        while support:
-            bit = support & -support
-            site = (bit.bit_length() - 1) // 4
-            support &= ~(0xf << (4 * site))
-
-            x = site % self.Lx
-            y = site // self.Lx
-            stagger = -1 if (x + y) & 1 else 1
-            for rem1, rem2, coeff in _ETA_LADDER_TERMS[axis]:
-                mode1 = 4 * site + rem1
-                mode2 = 4 * site + rem2
-                eta_mask = (1 << mode1) | (1 << mode2)
-                if (monomial.mask & eta_mask).bit_count() != 1:
-                    continue
-
-                prod = MajoranaMonomialSquare(self.Lx, self.Ly, monomial.mask ^ eta_mask)
-                if not self._sym_allowed(prod):
-                    continue
-                canon = self._sym_canon(prod, sign=True)
-                if canon is None:
-                    continue
-                key, canon_sign = canon
-                if key not in self.var_index:
-                    return None
-
-                sign = -1 if (
-                    (monomial.mask & ((1 << mode1) - 1)).bit_count()
-                    + (monomial.mask & ((1 << mode2) - 1)).bit_count()
-                ) & 1 else 1
-                idx = self.var_index[key]
-                expr[idx] = expr.get(idx, 0) + 2 * stagger * coeff * sign * canon_sign / prod.hermitian_phase()
-                if expr[idx] == 0:
-                    del expr[idx]
-
-        return AffineExpr(terms=expr, const=0)
 
     def compile(self, basis_reprs: list[MajoranaMonomialSquare]):
         self.basis_reprs = basis_reprs
@@ -910,38 +451,14 @@ class HubbardSquareCompiler:
         self._build_affines()
 
     def descendants(self, monomial: MajoranaMonomialSquare):
-        if not hasattr(self, '_descendants_cache'):
-            self._descendants_cache = LRU(_CACHE_MAX_SIZE)
-        if monomial.mask in self._descendants_cache:
-            return self._descendants_cache[monomial.mask]
+        r'''
+            calculate
 
-        entries = {}
-        comm_op = self._hamil_comm(monomial)
+                [H, O_a(0)] = \sum_{\mu,s} C_{a\mu}(s) T_s O_\mu(0)
 
-        for desc, coeff in comm_op.terms.items():
-            desc_rep = desc.trans_canon_rep
-            shift_x, shift_y, shift_sign = 0, 0, 1
-            for dx in range(desc.Lx):
-                for dy in range(desc.Ly):
-                    shifted, sign = desc_rep.translate(dx, dy)
-                    if shifted == desc:
-                        shift_x, shift_y, shift_sign = dx, dy, sign
-                        break
-                else:
-                    continue
-                break
-
-            key = (desc_rep.mask, shift_x, shift_y)
-            entries[key] = entries.get(key, 0) + coeff * shift_sign
-            if entries[key] == 0:
-                del entries[key]
-
-        descs = [
-            (MajoranaMonomialSquare(self.Lx, self.Ly, desc_mask), (shift_x, shift_y), coeff)
-            for (desc_mask, shift_x, shift_y), coeff in entries.items()
-        ]
-        self._descendants_cache[monomial.mask] = descs
-        return descs
+            as a list [(O_\mu(0), (s_x, s_y), coeff), ...]
+        '''
+        return self._core.descendants(monomial)
 
     def _get_expr_str(self, expr: AffineExpr) -> str:
         parts = [
@@ -983,7 +500,7 @@ class HubbardSquareCompiler:
             affines_mat=self.affines_mat,
             observables=self.obs_exprs,
             energy_ineqs=self.energy_ineqs,
-            var_keys=sorted(self.var_index, key=self.var_index.get),
+            var_keys=[var.mask for var in self.vars],
         )
 
     def clone(self):

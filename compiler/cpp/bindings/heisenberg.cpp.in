@@ -1,32 +1,95 @@
 /*
 <%
 setup_pybind11(cfg)
-cfg['compiler_args'] = ['-std=c++20', '-O3', '-mpopcnt']
+cfg['compiler_args'] = ['-std=c++20', '-O3', '-mpopcnt', '-fopenmp']
+cfg['linker_args'] = ['-fopenmp']
 cfg.setdefault('include_dirs', [])
 cfg['include_dirs'].append('@REPO_ROOT@')
 %>
 */
 
-#include "compiler/cpp/kernels/heisenberg.hpp"
-#include "operators/cpp/py_words.hpp"
+#include "compiler/cpp/core/heisenberg.hpp"
 
+#include <pybind11/complex.h>
+#include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include <cstdint>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace py = pybind11;
-using PauliString = qmbboot::operators::PauliString<@L@>;
-using qmbboot::operators::py_words::words_to_mask;
+using qmbboot::compiler::core::Complex;
+using qmbboot::compiler::core::HeisenbergWardCharge;
+using qmbboot::compiler::core::LinearExprBatch;
+using qmbboot::compiler::core::MomentsLookup;
+using HeisenbergCompilerCore = qmbboot::compiler::core::HeisenbergCompilerCore<@L@>;
+using PauliString = HeisenbergCompilerCore::PauliString;
 
 namespace {
 
-py::int_ sym_canon(const PauliString& pstr) {
-    auto canon = qmbboot::compiler::heisenberg::sym_canon<@L@>(pstr);
-    return words_to_mask(canon.words());
+template <class T>
+py::array_t<T> to_array(const std::vector<T>& vec) {
+    return py::array_t<T>(vec.size(), vec.data());
+}
+
+HeisenbergWardCharge to_ward_charge(const std::string& charge) {
+    if (charge == "hamil") return HeisenbergWardCharge::hamil;
+    if (charge == "Sx") return HeisenbergWardCharge::spin_x;
+    if (charge == "Sy") return HeisenbergWardCharge::spin_y;
+    if (charge == "Sz") return HeisenbergWardCharge::spin_z;
+    throw std::invalid_argument("unknown Ward charge " + charge);
 }
 
 }  // namespace
 
 PYBIND11_MODULE(@MODULE_NAME@, m) {
-    m.doc() = "JIT C++ Heisenberg compiler kernels";
+    m.doc() = "JIT C++ Heisenberg compiler core";
 
-    m.def("sym_canon", &sym_canon, py::arg("pstr"));
+    py::class_<HeisenbergCompilerCore>(m, "HeisenbergCompilerCore")
+        .def(
+            py::init<const std::vector<PauliString>&, const std::vector<Complex>&>(),
+            py::arg("hamil_paulis"), py::arg("hamil_coeffs")
+        )
+        .def("vars", &HeisenbergCompilerCore::vars)
+        .def("build_vars", [](HeisenbergCompilerCore& core, const std::vector<PauliString>& basis) {
+            MomentsLookup moments;
+            {
+                py::gil_scoped_release release;
+                moments = core.build_vars(basis);
+            }
+            return py::make_tuple(
+                to_array(moments.pair_offsets), to_array(moments.pair_sizes),
+                to_array(moments.rs), to_array(moments.idxs), to_array(moments.coeffs)
+            );
+        }, py::arg("basis"))
+        .def("build_ward_identities", [](const HeisenbergCompilerCore& core, const std::string& charge) {
+            const auto ward_charge = to_ward_charge(charge);
+            LinearExprBatch batch;
+            {
+                py::gil_scoped_release release;
+                batch = core.build_ward_identities(ward_charge);
+            }
+            return py::make_tuple(to_array(batch.offsets), to_array(batch.idxs), to_array(batch.coeffs));
+        }, py::arg("charge"))
+        .def("compile_expr", [](
+            const HeisenbergCompilerCore& core,
+            const std::vector<PauliString>& paulis,
+            const std::vector<Complex>& coeffs
+        ) -> py::object {
+            const auto expr = core.compile_expr(paulis, coeffs);
+            if (!expr) {
+                return py::none();
+            }
+            std::vector<std::int32_t> idxs;
+            std::vector<Complex> expr_coeffs;
+            for (const auto& [idx, coeff] : expr->terms) {
+                idxs.push_back(idx);
+                expr_coeffs.push_back(coeff);
+            }
+            return py::make_tuple(to_array(idxs), to_array(expr_coeffs));
+        }, py::arg("paulis"), py::arg("coeffs"))
+        .def("descendants", &HeisenbergCompilerCore::descendants, py::arg("pstr"));
 }

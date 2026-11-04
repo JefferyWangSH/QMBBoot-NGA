@@ -21,6 +21,21 @@ inline constexpr int _PAULI_X = 1;
 inline constexpr int _PAULI_Z = 2;
 inline constexpr int _PAULI_Y = 3;
 
+// the product of the codes a and b is the code a ^ b with a phase given by
+// _PAULI_PHASE[_PAULI_MUL_PHASE_POWER[a][b]], as in operators/pauli.py
+inline constexpr int _PAULI_MUL_PHASE_POWER[4][4] = {
+    {0, 0, 0, 0},
+    {0, 0, 3, 1},
+    {0, 1, 0, 3},
+    {0, 3, 1, 0},
+};
+inline constexpr std::complex<double> _PAULI_PHASE[4] = {
+    {1.0, 0.0},
+    {0.0, 1.0},
+    {-1.0, 0.0},
+    {0.0, -1.0},
+};
+
 template <std::size_t L_>
 class PauliString {
     static_assert(L_ > 0, "L must be positive");
@@ -204,26 +219,13 @@ class PauliString {
         }
 
         std::pair<PauliString, std::complex<double>> mul(const PauliString& other) const {
-            static constexpr int phase_power[4][4] = {
-                {0, 0, 0, 0},
-                {0, 0, 3, 1},
-                {0, 1, 0, 3},
-                {0, 3, 1, 0},
-            };
-            static constexpr std::complex<double> phase[4] = {
-                {1.0, 0.0},
-                {0.0, 1.0},
-                {-1.0, 0.0},
-                {0.0, -1.0},
-            };
-
             PauliString result;
             int power = 0;
             result.m_words = m_words ^ other.m_words;
             for (std::size_t site = 0; site < L; ++site) {
-                power += phase_power[code(site)][other.code(site)];
+                power += _PAULI_MUL_PHASE_POWER[code(site)][other.code(site)];
             }
-            return {result, phase[power & 3]};
+            return {result, _PAULI_PHASE[power & 3]};
         }
 
         PauliString dag() const {
