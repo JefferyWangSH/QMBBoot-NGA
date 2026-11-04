@@ -354,7 +354,7 @@ class IsingCompiler:
             # K maps M(k) to itself and D^H M(k) D is real for D = diag(i^{n_a}),
             # n_a = parity of the number of Y in P_a
             if (2 * q) % self.L == 0:
-                psd.realify_phase = [pstr.parity() for pstr in block_basis]
+                psd.realify_phase = np.array([pstr.parity() for pstr in block_basis], dtype=np.int64)
             self.psd_blocks.append(psd)
 
     def _hamil_comm(self, pstr: PauliString) -> PauliOperator:

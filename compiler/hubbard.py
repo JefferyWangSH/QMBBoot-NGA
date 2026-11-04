@@ -317,7 +317,9 @@ class HubbardCompiler:
             # K maps M(k) to itself and D^H M(k) D is real for D = diag(i^{n_a}),
             # n_a = parity of the number of gamma_2 Majoranas in O_a
             if (2 * q) % self.L == 0:
-                psd.realify_phase = [monomial.k_parity(hermitian=False) for monomial in block_basis]
+                psd.realify_phase = np.array(
+                    [monomial.k_parity(hermitian=False) for monomial in block_basis], dtype=np.int64
+                )
             self.psd_blocks.append(psd)
 
     def _build_affines(self):
@@ -356,9 +358,7 @@ class HubbardCompiler:
         # after compiled to hermitianized real variables; the same holds for eta^-.
         for charge in self.ward_ops:
             offsets, idxs, coeffs = self._core.build_ward_identities(charge)
-            offsets, idxs, coeffs = offsets.tolist(), idxs.tolist(), coeffs.tolist()
-            for start, end in zip(offsets[:-1], offsets[1:]):
-                self.affines.add(AffineExpr(terms=dict(zip(idxs[start:end], coeffs[start:end])), const=0))
+            self.affines.add_batch(offsets, idxs, coeffs)
             self.ward_ops[charge] = len(offsets) - 1
 
         self.affines_mat, _ = self.affines.matrix(prune=True, tol=1e-12)

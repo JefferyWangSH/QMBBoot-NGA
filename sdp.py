@@ -89,16 +89,16 @@ class PSDConstraints:
 
     # flattened view of A^k_{ij} into a sparse matrix A_{ij,k}, as COO terms (row = i + j*dim, col = k)
     # of the lower triangle i >= j only; duplicate terms are summed implicitly in affine_map
-    rows: list[int] = field(default_factory=list)
-    cols: list[int] = field(default_factory=list)
-    vals: list[float|complex] = field(default_factory=list)
+    rows: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    cols: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    vals: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
     # flattened view of C_{ij}, lower triangle i >= j only
-    const_rows: list[int] = field(default_factory=list)
-    const_vals: list[float|complex] = field(default_factory=list)
+    const_rows: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    const_vals: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
     # exponents phi_i of the diagonal phase D = diag(i^{phi_i}) making D^H M D real
-    realify_phase: list[int] | None = None
+    realify_phase: np.ndarray | None = None
 
     # symmetry sector of the block, unique within an SDPData,
     # and basis operator (string / monomial) key of each row, unique within the block
@@ -172,26 +172,47 @@ class PSDConstraints:
 @dataclass(slots=True)
 class AffineConstraints:
     n_vars: int
-    rows: list[int] = field(default_factory=list)
-    cols: list[int] = field(default_factory=list)
-    vals: list[float|complex] = field(default_factory=list)
+    # COO chunks of the real rows, one per add / add_batch
+    rows: list[np.ndarray] = field(default_factory=list)
+    cols: list[np.ndarray] = field(default_factory=list)
+    vals: list[np.ndarray] = field(default_factory=list)
     n_rows: int = 0
 
     def add(self, expr: AffineExpr):
+        rows, cols, vals = [], [], []
         for real_expr in expr.realify():
             for idx, coeff in real_expr.terms.items():
-                self.rows.append(self.n_rows)
-                self.cols.append(idx)
-                self.vals.append(coeff)
+                rows.append(self.n_rows)
+                cols.append(idx)
+                vals.append(coeff)
             if real_expr.const != 0:
-                self.rows.append(self.n_rows)
-                self.cols.append(self.n_vars)
-                self.vals.append(real_expr.const)
+                rows.append(self.n_rows)
+                cols.append(self.n_vars)
+                vals.append(real_expr.const)
             self.n_rows += 1
+        self.rows.append(np.array(rows, dtype=np.int64))
+        self.cols.append(np.array(cols, dtype=np.int64))
+        self.vals.append(np.array(vals, dtype=float))
+
+    def add_batch(self, offsets: np.ndarray, idxs: np.ndarray, coeffs: np.ndarray):
+        # rows sum_t coeffs[t] m_{idxs[t]} == 0 over t in [offsets[i], offsets[i+1]), realified as in add:
+        # the real part of row i becomes row 2i and the imaginary part row 2i+1, then empty rows are dropped
+        n = len(offsets) - 1
+        row_of = np.repeat(np.arange(n), np.diff(offsets))
+        is_real = coeffs.real != 0
+        is_imag = coeffs.imag != 0
+        parts = np.concatenate([2 * row_of[is_real], 2 * row_of[is_imag] + 1])
+        present = np.zeros(2 * n, dtype=bool)
+        present[parts] = True
+        new_rows = self.n_rows + np.cumsum(present) - 1
+        self.rows.append(new_rows[parts])
+        self.cols.append(np.concatenate([idxs[is_real], idxs[is_imag]]).astype(np.int64))
+        self.vals.append(np.concatenate([coeffs.real[is_real], coeffs.imag[is_imag]]))
+        self.n_rows += int(present.sum())
 
     def matrix(self, prune: bool = False, tol: float = 1e-12):
         mat = sp.sparse.csr_matrix(
-            (self.vals, (self.rows, self.cols)),
+            (np.concatenate(self.vals), (np.concatenate(self.rows), np.concatenate(self.cols))),
             shape=(self.n_rows, self.n_vars+1),
         )
         if not prune or self.n_rows == 0:
