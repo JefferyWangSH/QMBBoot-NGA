@@ -6,9 +6,9 @@
   * reveal block-diagonal structure in PSD moment matrices,
   * prune SDP optimization variables,
   * and impose Ward-identity constraints.
-* Use [CVXPY](https://github.com/cvxpy/cvxpy) for solving SDPs.
-* Build PSD blocks as vectorized sparse affine maps and build affine constraints as a sparse matrix.
-* Enable JIT acceleration for symbolic operator algebra and SDP compilation by setting environment variable `USE_JIT=1` (the default). Set `USE_JIT=0` to use the Python fallback.
+* Run symbolic operator algebra and SDP compilation in C++ (JIT-compiled with cppimport and OpenMP).
+* Use [scs-qmbboot](https://github.com/JefferyWangSH/scs-qmbboot), a fork of [SCS](https://github.com/cvxgrp/scs) specialized for quantum many-body bootstrap, by default to solve SDPs; also support various SDP backends through [CVXPY](https://github.com/cvxpy/cvxpy).
+* Enable *warm start* between NGA steps when using [scs-qmbboot](https://github.com/JefferyWangSH/scs-qmbboot), which dramatically accelerates the NGA trajectory.
 
 ## Models
 The following models are implemented:
@@ -39,13 +39,15 @@ Additional model-specific symmetries:
 
 ## Dependencies
 * python >= 3.13
-* numpy, scipy, cvxpy, scikit-sparse, lru-dict
-* (optional) cppimport, pybind11, and a C++20 compiler for JIT
+* numpy, scipy, scikit-sparse, lru-dict
+* cppimport, pybind11, and a C++20 compiler with OpenMP for the JIT modules
+* [scs-qmbboot](https://github.com/JefferyWangSH/scs-qmbboot) for fast, memory-efficient SDP solving with warm starts
+* (optional) cvxpy with, e.g., MOSEK, SCS as alternative SDP backends
 
 ## Usage
 The main entry point is [`main.py`](main.py). For example, start an NGA run with:
 ```bash
-python main.py --config config/hubbard.json --output-dir results --steps 10
+python main.py --config config/hubbard_scs.json --output-dir results --steps 10
 ```
 Example configurations are available in [`config/`](config/). For more details, see the [wiki](https://deepwiki.com/JefferyWangSH/QMBBoot-NGA), which also includes a built-in AI agent to play with.
 
