@@ -20,15 +20,16 @@ def _hubbard(L: int):
     MajoranaMonomial.identity(L)
 
     return load_module(
-        'hubbard_core',
-        _CPP_PATH / 'bindings' / 'hubbard.cpp.in',
-        (
+        prefix='hubbard',
+        template=_CPP_PATH / 'bindings' / 'hubbard.cpp.in',
+        headers=(
             _CPP_PATH / 'core' / 'common.hpp',
             _CPP_PATH / 'core' / 'hubbard.hpp',
             _OPERATORS_CPP_PATH / 'majorana.hpp',
             _OPERATORS_CPP_PATH / 'words.hpp',
         ),
-        _CACHE_PATH / 'hubbard',
+        cache_dir=_CACHE_PATH / 'hubbard',
+        use_openmp=True,
         L=L,
     )
 
@@ -42,16 +43,17 @@ def _hubbard_square(Lx: int, Ly: int):
     MajoranaMonomialSquare.identity(Lx, Ly)
 
     return load_module(
-        'hubbard_square_core',
-        _CPP_PATH / 'bindings' / 'hubbard_square.cpp.in',
-        (
+        prefix='hubbard_square',
+        template=_CPP_PATH / 'bindings' / 'hubbard_square.cpp.in',
+        headers=(
             _CPP_PATH / 'core' / 'common.hpp',
             _CPP_PATH / 'core' / 'hubbard_square.hpp',
             _OPERATORS_CPP_PATH / 'majorana.hpp',
             _OPERATORS_CPP_PATH / 'majorana_square.hpp',
             _OPERATORS_CPP_PATH / 'words.hpp',
         ),
-        _CACHE_PATH / 'hubbard_square',
+        cache_dir=_CACHE_PATH / 'hubbard_square',
+        use_openmp=True,
         Lx=Lx,
         Ly=Ly,
     )
@@ -66,15 +68,16 @@ def _heisenberg(L: int):
     PauliString.identity(L)
 
     return load_module(
-        'heisenberg_core',
-        _CPP_PATH / 'bindings' / 'heisenberg.cpp.in',
-        (
+        prefix='heisenberg',
+        template=_CPP_PATH / 'bindings' / 'heisenberg.cpp.in',
+        headers=(
             _CPP_PATH / 'core' / 'common.hpp',
             _CPP_PATH / 'core' / 'heisenberg.hpp',
             _OPERATORS_CPP_PATH / 'pauli.hpp',
             _OPERATORS_CPP_PATH / 'words.hpp',
         ),
-        _CACHE_PATH / 'heisenberg',
+        cache_dir=_CACHE_PATH / 'heisenberg',
+        use_openmp=True,
         L=L,
     )
 
