@@ -1,4 +1,4 @@
-from operators.pauli import PauliString as PyPauliString
+from operators.pauli import _PyPauliString as PyPauliString
 from operators.pauli import PauliOperator
 from operators.jit import PauliString as CppPauliString
 

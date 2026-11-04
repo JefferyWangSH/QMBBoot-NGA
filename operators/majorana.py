@@ -1,5 +1,7 @@
 from functools import cached_property
 
+from .jit import MajoranaMonomial
+
 '''
     local Majorana-bilinear expansion of S^+_i and S^-_i
 
@@ -54,7 +56,7 @@ _MAJORANA_PLANE_C4_ROT = (
 )
 
 
-class MajoranaMonomial:
+class _PyMajoranaMonomial:
     '''
         spinful Majorana monomial on a length-L PBC chain (normal ordered).
 
@@ -63,12 +65,15 @@ class MajoranaMonomial:
             bit 1: (site, up, -)
             bit 2: (site, down, +)
             bit 3: (site, down, -)
+
+        archived native Python version, kept as a baseline for tests;
+        MajoranaMonomial is the JIT C++ version in use
     '''
     L: int
     mask: int # 4L-bit
     trans_canon: int
     trans_canon_sign: int
-    trans_canon_rep: 'MajoranaMonomial'
+    trans_canon_rep: '_PyMajoranaMonomial'
     _trans_canon_data: tuple[int, int]
     period: int
     period_sign: int
@@ -164,7 +169,7 @@ class MajoranaMonomial:
 
     def translate(self, shift: int):
         mask, sign = self._rotate_l(self.mask, shift)
-        return MajoranaMonomial(L=self.L, mask=mask), sign
+        return _PyMajoranaMonomial(L=self.L, mask=mask), sign
 
     def invert(self):
         '''
@@ -183,7 +188,7 @@ class MajoranaMonomial:
             mask |= 1 << new_mode
             support ^= bit
 
-        monomial = MajoranaMonomial(L=self.L, mask=mask)
+        monomial = _PyMajoranaMonomial(L=self.L, mask=mask)
         return monomial, (-1 if swaps & 1 else 1)
 
     def c4_rotate(self, up_quarters: int, dn_quarters: int):
@@ -208,7 +213,7 @@ class MajoranaMonomial:
             total_sign *= local_sign
             support ^= bit
 
-        monomial = MajoranaMonomial(L=self.L, mask=mask)
+        monomial = _PyMajoranaMonomial(L=self.L, mask=mask)
         return monomial, total_sign * (-1 if swaps & 1 else 1)
 
     def spin_exchange(self):
@@ -229,7 +234,7 @@ class MajoranaMonomial:
             mask |= 1 << new_mode
             support ^= bit
 
-        monomial = MajoranaMonomial(L=self.L, mask=mask)
+        monomial = _PyMajoranaMonomial(L=self.L, mask=mask)
         return monomial, (-1 if swaps & 1 else 1)
 
     def _occupied_sites(self) -> list[int]:
@@ -271,7 +276,7 @@ class MajoranaMonomial:
 
     @cached_property
     def trans_canon_rep(self):
-        return MajoranaMonomial(L=self.L, mask=self.trans_canon)
+        return _PyMajoranaMonomial(L=self.L, mask=self.trans_canon)
 
     @cached_property
     def _period_data(self) -> tuple[int, int]:
@@ -294,7 +299,7 @@ class MajoranaMonomial:
     def period_sign(self) -> int:
         return self._period_data[1]
 
-    def mul(self, other) -> tuple['MajoranaMonomial', int]:
+    def mul(self, other) -> tuple['_PyMajoranaMonomial', int]:
         if self.L != other.L:
             raise ValueError('cannot multiply Majorana monomials with different L')
 
@@ -306,7 +311,7 @@ class MajoranaMonomial:
                 sign = -sign
             right ^= bit
 
-        return MajoranaMonomial(L=self.L, mask=self.mask^other.mask), sign
+        return _PyMajoranaMonomial(L=self.L, mask=self.mask^other.mask), sign
 
     def degree(self) -> int:
         '''
@@ -380,19 +385,6 @@ class MajoranaMonomial:
                 spin, pm = divmod(rem, 2)
                 parts.append(f'{site}{spin_names[spin]}{pm_names[pm]}')
         return ' '.join(parts)
-
-
-import os
-
-if os.environ.get('USE_JIT', '1') != '0':
-    try:
-        from .jit import MajoranaMonomial
-    except ImportError as exc:
-        import warnings
-        warnings.warn(
-            f'failed to import JIT C++ MajoranaMonomial; falling back to Python implementation: {exc}',
-            RuntimeWarning,
-        )
 
 
 class MajoranaOperator:

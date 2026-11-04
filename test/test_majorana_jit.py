@@ -1,4 +1,4 @@
-from operators.majorana import MajoranaMonomial as PyMajoranaMonomial
+from operators.majorana import _PyMajoranaMonomial as PyMajoranaMonomial
 from operators.majorana import MajoranaOperator
 from operators.jit import MajoranaMonomial as CppMajoranaMonomial
 

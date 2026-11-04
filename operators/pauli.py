@@ -1,5 +1,7 @@
 from functools import cached_property
 
+from .jit import PauliString
+
 '''
     local Pauli encoding used by the 2-bit mask representation
     codes are I=0, X=1, Z=2, Y=3, so Pauli multiplication is mask XOR
@@ -15,11 +17,15 @@ _PAULI_MUL_PHASE_POWER = (
 )
 
 
-class PauliString:
+class _PyPauliString:
+    '''
+        archived native Python version, kept as a baseline for tests;
+        PauliString is the JIT C++ version in use
+    '''
     L: int
     mask: int # 2L-bit, each site uses I=00, X=01, Z=10, Y=11
     trans_canon: int
-    trans_canon_rep: 'PauliString'
+    trans_canon_rep: '_PyPauliString'
     period: int
 
     def __init__(self, L: int, mask: int = 0):
@@ -81,7 +87,7 @@ class PauliString:
 
     @cached_property
     def trans_canon_rep(self):
-        return PauliString(self.L, self.trans_canon)
+        return _PyPauliString(self.L, self.trans_canon)
 
     @cached_property
     def period(self) -> int:
@@ -96,7 +102,7 @@ class PauliString:
         return self.L
 
     def translate(self, shift: int):
-        return PauliString(self.L, self._rotate_l(self.mask, shift))
+        return _PyPauliString(self.L, self._rotate_l(self.mask, shift))
 
     def invert(self):
         # lattice inversion i <-> -i mod L
@@ -108,7 +114,7 @@ class PauliString:
             code = (self.mask >> (2*site)) & 3
             mask |= code << (2*((-site) % self.L))
             support &= ~(3 << (2*site))
-        return PauliString(self.L, mask)
+        return _PyPauliString(self.L, mask)
 
     def permute(self, perm: tuple[str, str, str]):
         code_map = {1: _PAULI_CODE[perm[0]], 3: _PAULI_CODE[perm[1]], 2: _PAULI_CODE[perm[2]]}
@@ -120,7 +126,7 @@ class PauliString:
             old_code = (self.mask >> (2*site)) & 3
             mask |= code_map[old_code] << (2*site)
             support &= ~(3 << (2*site))
-        return PauliString(self.L, mask)
+        return _PyPauliString(self.L, mask)
 
     def __eq__(self, other):
         return self.L == other.L and self.mask == other.mask
@@ -138,7 +144,7 @@ class PauliString:
     def dag(self):
         return self
 
-    def mul(self, other) -> tuple["PauliString", float|complex]:
+    def mul(self, other) -> tuple['_PyPauliString', float|complex]:
         assert self.L == other.L
         mask = self.mask ^ other.mask
         support = self.mask | other.mask
@@ -152,7 +158,7 @@ class PauliString:
             phase_power += _PAULI_MUL_PHASE_POWER[a][b]
             support &= ~(3 << (2*site))
 
-        return PauliString(self.L, mask), _PAULI_PHASE[phase_power & 3]
+        return _PyPauliString(self.L, mask), _PAULI_PHASE[phase_power & 3]
 
     def parity(self):
         # 0 for K even and 1 for K odd
@@ -190,19 +196,6 @@ class PauliString:
         '''
         nx, ny, nz = self.sign_charge()
         return ((nx + ny) & 1, (ny + nz) & 1)
-
-
-import os
-
-if os.environ.get('USE_JIT', '1') != '0':
-    try:
-        from .jit import PauliString
-    except ImportError as exc:
-        import warnings
-        warnings.warn(
-            f'failed to import JIT C++ PauliString; falling back to Python implementation: {exc}',
-            RuntimeWarning,
-        )
 
 
 class PauliOperator:
