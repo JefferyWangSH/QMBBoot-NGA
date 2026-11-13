@@ -14,6 +14,7 @@ from sdp import SDPSolverParams, SDPWarmData
 class ModelAdapter:
     model_type: str
     model_params: object
+    objective: dict
     compiler: object
     solver_params: object
     scheduler: object
@@ -27,7 +28,7 @@ class ModelAdapter:
 
     @staticmethod
     def build_compiler_kwargs(config_data: dict, build_obj, build_obs):
-        obj_config = config_data.get('objective', {})
+        obj_config = config_data['objective']
         obj_name = obj_config.get('obj', 'hamil')
         obj_kwargs = obj_config.get('obj_kwargs', {})
         obj_op = build_obj(obj_name, **obj_kwargs)
@@ -198,6 +199,9 @@ class ModelAdapter:
         else:
             raise ValueError(f'unknown model type: {model_type}')
 
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ SDP objective
+        objective = data['objective']
+
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ SDP solver params
         solver_params = SDPSolverParams(**data['solver'])
 
@@ -228,10 +232,13 @@ class ModelAdapter:
             resume_warm = Path(resume) / 'warm.npz'
 
             state = json.loads(resume_state.read_text())
-            if state['model'] != {'type': model_type, 'params': asdict(model_params)}:
-                raise ValueError('resume state model parameters do not match config')
+            model = {'type': model_type, 'params': asdict(model_params)}
+            if state['model'] != model:
+                raise ValueError('model of the resumed run does not match the config')
+            if state['objective'] != objective:
+                raise ValueError('objective of the resumed run does not match the config')
             basis = build_basis(json.loads(resume_basis.read_text()))
-            start_step = state.get('step', -1) + 1
+            start_step = state['last_step'] + 1
             records = state.get('records', [])
             events = json.loads(resume_events.read_text()) if resume_events.exists() else {'steps': []}
 
@@ -272,7 +279,7 @@ class ModelAdapter:
             drop_counts = {}
             warm_data = None
 
-        return cls(model_type, model_params, compiler, solver_params, scheduler, basis, required_basis, start_step, records, events, drop_counts, warm_data)
+        return cls(model_type, model_params, objective, compiler, solver_params, scheduler, basis, required_basis, start_step, records, events, drop_counts, warm_data)
 
     def get_basis_rep(self, key):
         if self.model_type == 'hubbard':
@@ -374,10 +381,9 @@ if __name__ == '__main__':
 
         output_state.parent.mkdir(parents=True, exist_ok=True)
         state = {
-            'step': step,
+            'last_step': step,
             'model': {'type': adapter.model_type, 'params': asdict(adapter.model_params)},
-            'solver': runner.solver_params.to_dict(),
-            'scheduler': runner.scheduler.to_dict(),
+            'objective': adapter.objective,
             'records': records,
         }
         output_state.write_text(json.dumps(state, indent=2))
