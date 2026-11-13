@@ -9,6 +9,7 @@
   },
   "objective": {
     "obj": "hamil",
+    "obj_kwargs": {},
     "obj_sense": "min",
     "e_lb": null,
     "e_ub": null

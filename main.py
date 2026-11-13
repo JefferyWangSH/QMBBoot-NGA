@@ -29,7 +29,8 @@ class ModelAdapter:
     def build_compiler_kwargs(config_data: dict, build_obj, build_obs):
         obj_config = config_data.get('objective', {})
         obj_name = obj_config.get('obj', 'hamil')
-        obj_op = None if obj_name == 'hamil' else build_obj(obj_name)
+        obj_kwargs = obj_config.get('obj_kwargs', {})
+        obj_op = build_obj(obj_name, **obj_kwargs)
 
         obj_sense = obj_config.get('obj_sense', 'min')
         if obj_sense not in ('min', 'max'):
@@ -67,13 +68,13 @@ class ModelAdapter:
             from operators.majorana import MajoranaMonomial
             model_params = HubbardParams(**model_config)
 
-            def build_obj(name):
+            def build_obj(name, **kwargs):
                 if name == 'hamil':
-                    return build_hamil(model_params)
+                    return build_hamil(model_params, **kwargs)
                 if name == 'szz':
-                    return build_szz(model_params, 1)
+                    return build_szz(model_params, **kwargs)
                 if name == 'double_occ':
-                    return build_double_occ(model_params)
+                    return build_double_occ(model_params, **kwargs)
                 raise ValueError(f'unknown Hubbard objective: {name}')
 
             def build_obs(name):
@@ -105,13 +106,13 @@ class ModelAdapter:
             from operators.majorana_square import MajoranaMonomialSquare
             model_params = HubbardSquareParams(**model_config)
 
-            def build_obj(name):
+            def build_obj(name, **kwargs):
                 if name == 'hamil':
-                    return build_hamil(model_params)
+                    return build_hamil(model_params, **kwargs)
                 if name == 'szz':
-                    return build_szz(model_params, 1, 0)
+                    return build_szz(model_params, **kwargs)
                 if name == 'double_occ':
-                    return build_double_occ(model_params)
+                    return build_double_occ(model_params, **kwargs)
                 raise ValueError(f'unknown Hubbard square objective: {name}')
 
             def build_obs(name):
@@ -146,11 +147,11 @@ class ModelAdapter:
             from compiler.ising import IsingCompiler, IsingParams, build_basis_reprs, build_hamil, build_zz
             model_params = IsingParams(**model_config)
 
-            def build_obj(name):
+            def build_obj(name, **kwargs):
                 if name == 'hamil':
-                    return build_hamil(model_params)
+                    return build_hamil(model_params, **kwargs)
                 if name == 'zz':
-                    return build_zz(model_params, 1)
+                    return build_zz(model_params, **kwargs)
                 raise ValueError(f'unknown Ising objective: {name}')
 
             def build_obs(name):
@@ -172,11 +173,11 @@ class ModelAdapter:
             from compiler.heisenberg import HeisenbergCompiler, HeisenbergParams, build_basis_reprs, build_hamil, build_szz
             model_params = HeisenbergParams(**model_config)
 
-            def build_obj(name):
+            def build_obj(name, **kwargs):
                 if name == 'hamil':
-                    return build_hamil(model_params)
+                    return build_hamil(model_params, **kwargs)
                 if name == 'szz':
-                    return build_szz(model_params, 1)
+                    return build_szz(model_params, **kwargs)
                 raise ValueError(f'unknown Heisenberg objective: {name}')
 
             def build_obs(name):
