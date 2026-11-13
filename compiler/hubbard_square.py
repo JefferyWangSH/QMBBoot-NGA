@@ -190,8 +190,8 @@ class HubbardSquareCompiler:
 
         self.obj_op = self.hamil_op if obj_op is None else obj_op
         if self.obj_op != self.hamil_op:
-            if e_lb is None or e_ub is None:
-                raise ValueError('observable objective requires energy bounds e_lb and e_ub')
+            if e_ub is None:
+                raise ValueError('observable objective requires the energy upper bound e_ub; the lower bound e_lb is optional')
             self.e_lb = e_lb
             self.e_ub = e_ub
         else:

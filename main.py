@@ -41,8 +41,8 @@ class ModelAdapter:
         e_ub = obj_config.get('e_ub')
         if obj_name == 'hamil' and (e_lb is not None or e_ub is not None):
             raise ValueError('e_lb and e_ub are only valid for non-Hamiltonian objectives')
-        if obj_name != 'hamil' and (e_lb is None or e_ub is None):
-            raise ValueError('observable objective requires energy bounds e_lb and e_ub')
+        if obj_name != 'hamil' and e_ub is None:
+            raise ValueError('observable objective requires the energy upper bound e_ub; the lower bound e_lb is optional')
 
         obs_ops = {name: build_obs(name) for name in config_data.get('observables', [])}
         return {
